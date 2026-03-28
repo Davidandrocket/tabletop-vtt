@@ -239,6 +239,7 @@ function addTokenToMap(token) {
     window.socketEmit("move_token", { id: token.id, x: newX, y: newY });
   });
 
+  renderConditionIcons(group, token, radius);
   tokenNodes[token.id] = group;
   tokenLayer.add(group);
   tokenLayer.batchDraw();
@@ -282,6 +283,7 @@ function updateTokenOnMap(token) {
   const bodyFill = group.findOne(".body-fill");
   if (bodyFill) bodyFill.fill(token.color || "#e74c3c");
 
+  renderConditionIcons(group, token, radius);
   tokenLayer.batchDraw();
 }
 
@@ -445,5 +447,66 @@ function setMapOffset(offsetX, offsetY, scaleX, scaleY) {
     if (scaleY !== undefined) mapImageNode.scaleY(scaleY);
     updateHandlePosition();
     imageLayer.batchDraw();
+  }
+}
+
+// --- Condition icons ---
+
+const COND_SIZE = 16; // icon size in canvas px
+const COND_GAP  = 2;  // gap between icons
+
+const _condImgCache = {}; // name -> Promise<HTMLImageElement|null>
+
+function loadConditionImage(name) {
+  if (!_condImgCache[name]) {
+    _condImgCache[name] = new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = `/static/conditions/${name}.svg`;
+    });
+  }
+  return _condImgCache[name];
+}
+
+function renderConditionIcons(group, token, radius) {
+  group.findOne(".cond-group")?.destroy();
+
+  const conditions = token.conditions || [];
+  if (conditions.length === 0) return;
+
+  const condGroup = new Konva.Group({ name: "cond-group", listening: false });
+  group.add(condGroup);
+
+  const uniqueConds = [...new Set(conditions.filter(c => c !== "exhaustion"))];
+  const exhCount    = conditions.filter(c => c === "exhaustion").length;
+
+  // Y of the top of the horizontal (non-exhaustion) icon row, directly above token
+  const rowY = -radius - COND_GAP - COND_SIZE;
+
+  // Draw background + image for a single icon
+  function placeIcon(imgEl, x, y) {
+    condGroup.add(new Konva.Rect({
+      x, y, width: COND_SIZE, height: COND_SIZE,
+      fill: "rgba(0,0,0,0.55)", cornerRadius: 3,
+    }));
+    condGroup.add(new Konva.Image({
+      image: imgEl, x, y, width: COND_SIZE, height: COND_SIZE,
+    }));
+    tokenLayer.batchDraw();
+  }
+
+  // Horizontal row of non-exhaustion conditions, centered
+  const rowWidth = uniqueConds.length * COND_SIZE + Math.max(0, uniqueConds.length - 1) * COND_GAP;
+  const rowStartX = -(rowWidth / 2);
+  uniqueConds.forEach((cond, i) => {
+    const x = rowStartX + i * (COND_SIZE + COND_GAP);
+    loadConditionImage(cond).then(img => { if (img) placeIcon(img, x, rowY); });
+  });
+
+  // Exhaustion stack, centered, each level stacked vertically above the horizontal row
+  for (let i = 0; i < exhCount; i++) {
+    const y = rowY - (exhCount - i) * (COND_SIZE + COND_GAP);
+    loadConditionImage("exhaustion").then(img => { if (img) placeIcon(img, -(COND_SIZE / 2), y); });
   }
 }

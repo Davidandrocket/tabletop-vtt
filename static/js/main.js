@@ -675,6 +675,13 @@ function openEditToken(tokenId) {
   document.getElementById("edit-tok-size").value = token.size || 1;
   document.getElementById("edit-tok-image").value = token.image_url || "";
 
+  // Populate condition checkboxes
+  const exhCount = (token.conditions || []).filter(c => c === "exhaustion").length;
+  document.getElementById("edit-tok-exhaustion-val").textContent = exhCount;
+  document.querySelectorAll(".condition-grid .cond-toggle input[type=checkbox]").forEach(cb => {
+    cb.checked = (token.conditions || []).includes(cb.value);
+  });
+
   const playerSection = document.getElementById("edit-tok-player-section");
   if (ROLE === "dm") {
     playerSection.classList.remove("hidden");
@@ -703,9 +710,23 @@ function openEditToken(tokenId) {
   document.getElementById("edit-token-modal").classList.remove("hidden");
 }
 
+function stepExhaustion(delta) {
+  const el = document.getElementById("edit-tok-exhaustion-val");
+  const val = Math.max(0, Math.min(6, (parseInt(el.textContent) || 0) + delta));
+  el.textContent = val;
+}
+
 function submitEditToken() {
   if (!_editingTokenId) return;
   const isPlayer = ROLE === "dm" && document.getElementById("edit-tok-isplayer").checked;
+  // Collect conditions
+  const conditions = [];
+  document.querySelectorAll(".condition-grid .cond-toggle input[type=checkbox]:checked").forEach(cb => {
+    conditions.push(cb.value);
+  });
+  const exhVal = parseInt(document.getElementById("edit-tok-exhaustion-val").textContent) || 0;
+  for (let i = 0; i < exhVal; i++) conditions.push("exhaustion");
+
   const data = {
     id: _editingTokenId,
     name: document.getElementById("edit-tok-name").value || "Token",
@@ -714,6 +735,7 @@ function submitEditToken() {
     color: document.getElementById("edit-tok-color").value,
     size: parseInt(document.getElementById("edit-tok-size").value) || 1,
     image_url: document.getElementById("edit-tok-image").value.trim() || null,
+    conditions,
   };
   if (ROLE === "dm") {
     data.is_player = isPlayer;

@@ -563,6 +563,17 @@ def on_update_token(data):
     if "max_hp" in data:
         token["max_hp"] = max(1, int(data["max_hp"]))
         token["hp"] = min(token["hp"], token["max_hp"])
+    if "conditions" in data:
+        raw = data["conditions"]
+        if isinstance(raw, list):
+            allowed = {
+                "blinded","charmed","deafened","exhaustion","frightened","grappled",
+                "incapacitated","invisible","paralyzed","petrified","poisoned",
+                "prone","restrained","stunned","unconscious",
+            }
+            cleaned = [c for c in raw if isinstance(c, str) and c in allowed]
+            exh = min(cleaned.count("exhaustion"), 6)
+            token["conditions"] = [c for c in cleaned if c != "exhaustion"] + ["exhaustion"] * exh
     if info["role"] == "dm":
         if "is_player" in data:
             token["is_player"] = bool(data["is_player"])

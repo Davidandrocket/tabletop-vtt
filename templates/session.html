@@ -265,6 +265,33 @@
       <label>Image URL <span style="color:var(--text-dim);font-size:0.75rem">(optional)</span>
         <input id="edit-tok-image" type="text" placeholder="https://...">
       </label>
+      <div class="modal-section-label">Conditions</div>
+      <div class="condition-grid">
+        <label class="cond-toggle" title="Blinded"><input type="checkbox" value="blinded"><img src="/static/conditions/blinded.svg"><span>Blinded</span></label>
+        <label class="cond-toggle" title="Charmed"><input type="checkbox" value="charmed"><img src="/static/conditions/charmed.svg"><span>Charmed</span></label>
+        <label class="cond-toggle" title="Deafened"><input type="checkbox" value="deafened"><img src="/static/conditions/deafened.svg"><span>Deafened</span></label>
+        <label class="cond-toggle" title="Frightened"><input type="checkbox" value="frightened"><img src="/static/conditions/frightened.svg"><span>Frightened</span></label>
+        <label class="cond-toggle" title="Grappled"><input type="checkbox" value="grappled"><img src="/static/conditions/grappled.svg"><span>Grappled</span></label>
+        <label class="cond-toggle" title="Incapacitated"><input type="checkbox" value="incapacitated"><img src="/static/conditions/incapacitated.svg"><span>Incapacitated</span></label>
+        <label class="cond-toggle" title="Invisible"><input type="checkbox" value="invisible"><img src="/static/conditions/invisible.svg"><span>Invisible</span></label>
+        <label class="cond-toggle" title="Paralyzed"><input type="checkbox" value="paralyzed"><img src="/static/conditions/paralyzed.svg"><span>Paralyzed</span></label>
+        <label class="cond-toggle" title="Petrified"><input type="checkbox" value="petrified"><img src="/static/conditions/petrified.svg"><span>Petrified</span></label>
+        <label class="cond-toggle" title="Poisoned"><input type="checkbox" value="poisoned"><img src="/static/conditions/poisoned.svg"><span>Poisoned</span></label>
+        <label class="cond-toggle" title="Prone"><input type="checkbox" value="prone"><img src="/static/conditions/prone.svg"><span>Prone</span></label>
+        <label class="cond-toggle" title="Restrained"><input type="checkbox" value="restrained"><img src="/static/conditions/restrained.svg"><span>Restrained</span></label>
+        <label class="cond-toggle" title="Stunned"><input type="checkbox" value="stunned"><img src="/static/conditions/stunned.svg"><span>Stunned</span></label>
+        <label class="cond-toggle" title="Unconscious"><input type="checkbox" value="unconscious"><img src="/static/conditions/unconscious.svg"><span>Unconscious</span></label>
+        <div class="cond-exhaustion">
+          <img src="/static/conditions/exhaustion.svg">
+          <span>Exhaustion</span>
+          <div class="exh-stepper">
+            <button type="button" onclick="stepExhaustion(-1)">−</button>
+            <span id="edit-tok-exhaustion-val">0</span>
+            <button type="button" onclick="stepExhaustion(1)">+</button>
+          </div>
+        </div>
+      </div>
+
       <div id="edit-tok-player-section" class="hidden">
         <label class="checkbox-label">
           <input id="edit-tok-isplayer" type="checkbox"> Player token

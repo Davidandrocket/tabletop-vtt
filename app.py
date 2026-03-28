@@ -567,7 +567,7 @@ def on_update_token(data):
         raw = data["conditions"]
         if isinstance(raw, list):
             allowed = {
-                "blinded","charmed","deafened","exhaustion","frightened","grappled",
+                "blinded","burning","charmed","deafened","exhaustion","frightened","grappled",
                 "incapacitated","invisible","paralyzed","petrified","poisoned",
                 "prone","restrained","stunned","unconscious",
             }

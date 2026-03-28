@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 32 32" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:1.5;">
+    <g id="Stunned">
+        <circle cx="16" cy="16" r="16" style="fill:rgb(0,188,212);"/>
+        <g transform="matrix(0,-0.631759,0.631759,0,17.11066,16.502858)">
+            <path d="M20.695,0C20.695,-11.43 11.43,-20.695 -0,-20.695C-10.55,-20.695 -19.103,-12.142 -19.103,-1.592C-19.103,7.999 -11.328,15.775 -1.737,15.775C6.895,15.775 13.893,8.777 13.893,0.145C13.893,-7.528 7.673,-13.748 -0,-13.748C-6.714,-13.748 -12.157,-8.306 -12.157,-1.592C-12.157,4.163 -7.491,8.828 -1.737,8.828C3.059,8.828 6.947,4.94 6.947,0.145C6.947,-3.692 3.836,-6.802 -0,-6.802C-2.877,-6.802 -5.21,-4.469 -5.21,-1.592C-5.21,0.326 -3.655,1.881 -1.737,1.881C-0.778,1.881 0,1.104 -0,0.145" style="fill:none;stroke:white;stroke-width:4.61px;"/>
+        </g>
+    </g>
+</svg>

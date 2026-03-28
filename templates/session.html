@@ -246,6 +246,42 @@
   </div>
   {% endif %}
 
+  <!-- Edit Token Modal (DM + players for own token) -->
+  <div id="edit-token-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>Edit Token</h3>
+      <label>Name <input id="edit-tok-name" type="text" maxlength="50"></label>
+      <label>HP <input id="edit-tok-hp" type="number" min="0"></label>
+      <label>Max HP <input id="edit-tok-maxhp" type="number" min="1"></label>
+      <label>Color <input id="edit-tok-color" type="color"></label>
+      <label>Size
+        <select id="edit-tok-size">
+          <option value="1">1×1 — Small / Medium</option>
+          <option value="2">2×2 — Large</option>
+          <option value="3">3×3 — Huge</option>
+          <option value="4">4×4 — Gargantuan</option>
+        </select>
+      </label>
+      <label>Image URL <span style="color:var(--text-dim);font-size:0.75rem">(optional)</span>
+        <input id="edit-tok-image" type="text" placeholder="https://...">
+      </label>
+      <div id="edit-tok-player-section" class="hidden">
+        <label class="checkbox-label">
+          <input id="edit-tok-isplayer" type="checkbox"> Player token
+        </label>
+        <div id="edit-tok-player-select-wrap" class="hidden">
+          <label>Assign to player
+            <select id="edit-tok-player-select"></select>
+          </label>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-primary" onclick="submitEditToken()">Save</button>
+        <button onclick="closeModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Initiative input Modal -->
   {% if role == 'dm' %}
   <div id="initiative-modal" class="modal hidden">

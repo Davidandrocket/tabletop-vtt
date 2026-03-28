@@ -210,6 +210,7 @@ function addTokenToMap(token) {
   group.add(new Konva.Text({
     text: token.name,
     fontSize: 10, fill: "#ccc",
+    stroke: "#000", strokeWidth: 2, fillAfterStrokeEnabled: true,
     align: "center",
     offsetX: labelW / 2,
     y: radius + barH + 6,
@@ -218,6 +219,16 @@ function addTokenToMap(token) {
   }));
 
   group.on("click tap", (e) => { e.cancelBubble = true; selectToken(token.id); });
+
+  group.on("contextmenu", (e) => {
+    e.evt.preventDefault();
+    e.cancelBubble = true;
+    const isDM = document.body.dataset.role === "dm";
+    const canEdit = isDM || (window.MY_UUID && token.player_id === window.MY_UUID);
+    if (!canEdit) return;
+    selectToken(token.id);
+    window.openEditToken(token.id);
+  });
 
   group.on("dragend", () => {
     const newX = Math.round(group.x() / GRID - size / 2);

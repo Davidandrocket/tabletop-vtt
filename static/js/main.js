@@ -50,6 +50,7 @@ window.MY_SID = null;
 window.MY_UUID = null;
 window.socketEmit = (event, data) => socket.emit(event, data);
 window.onTokenSelected = onTokenSelected;
+window.openEditToken = openEditToken;
 
 socket.on("connect", () => {
   document.getElementById("connection-status").className = "status-dot connected";
@@ -136,8 +137,17 @@ socket.on("token_moved", (data) => {
 });
 
 socket.on("token_updated", (token) => {
+  const old = sessionTokens[token.id];
   sessionTokens[token.id] = token;
-  updateTokenOnMap(token);
+  // Rebuild if size or image changed — simple update can't handle those
+  if (!old || old.size !== token.size || old.image_url !== token.image_url) {
+    const wasSelected = selectedTokenId === token.id;
+    removeTokenFromMap(token.id);
+    addTokenToMap(token);
+    if (wasSelected) selectToken(token.id);
+  } else {
+    updateTokenOnMap(token);
+  }
   if (selectedTokenId === token.id) refreshHpEditor(token);
 });
 
@@ -648,6 +658,68 @@ function submitAddToken() {
     x: 0,
     y: 0,
   });
+  closeModal();
+}
+
+let _editingTokenId = null;
+
+function openEditToken(tokenId) {
+  const token = sessionTokens[tokenId];
+  if (!token) return;
+  _editingTokenId = tokenId;
+
+  document.getElementById("edit-tok-name").value = token.name;
+  document.getElementById("edit-tok-hp").value = token.hp;
+  document.getElementById("edit-tok-maxhp").value = token.max_hp;
+  document.getElementById("edit-tok-color").value = token.color || "#e74c3c";
+  document.getElementById("edit-tok-size").value = token.size || 1;
+  document.getElementById("edit-tok-image").value = token.image_url || "";
+
+  const playerSection = document.getElementById("edit-tok-player-section");
+  if (ROLE === "dm") {
+    playerSection.classList.remove("hidden");
+    const select = document.getElementById("edit-tok-player-select");
+    select.innerHTML = "";
+    for (const [sid, player] of Object.entries(onlinePlayers)) {
+      const opt = document.createElement("option");
+      opt.value = sid;
+      opt.textContent = player.name;
+      select.appendChild(opt);
+    }
+    const checkbox = document.getElementById("edit-tok-isplayer");
+    const wrap = document.getElementById("edit-tok-player-select-wrap");
+    checkbox.checked = !!token.is_player;
+    wrap.classList.toggle("hidden", !token.is_player);
+    checkbox.onchange = () => wrap.classList.toggle("hidden", !checkbox.checked);
+    // Pre-select the assigned player if they're online
+    if (token.player_id) {
+      const sid = Object.entries(onlinePlayers).find(([, p]) => p.uuid === token.player_id)?.[0];
+      if (sid) select.value = sid;
+    }
+  } else {
+    playerSection.classList.add("hidden");
+  }
+
+  document.getElementById("edit-token-modal").classList.remove("hidden");
+}
+
+function submitEditToken() {
+  if (!_editingTokenId) return;
+  const isPlayer = ROLE === "dm" && document.getElementById("edit-tok-isplayer").checked;
+  const data = {
+    id: _editingTokenId,
+    name: document.getElementById("edit-tok-name").value || "Token",
+    hp: parseInt(document.getElementById("edit-tok-hp").value) || 0,
+    max_hp: parseInt(document.getElementById("edit-tok-maxhp").value) || 10,
+    color: document.getElementById("edit-tok-color").value,
+    size: parseInt(document.getElementById("edit-tok-size").value) || 1,
+    image_url: document.getElementById("edit-tok-image").value.trim() || null,
+  };
+  if (ROLE === "dm") {
+    data.is_player = isPlayer;
+    data.player_id = isPlayer ? document.getElementById("edit-tok-player-select").value : null;
+  }
+  socket.emit("update_token", data);
   closeModal();
 }
 

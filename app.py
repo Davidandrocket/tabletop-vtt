@@ -536,6 +536,42 @@ def on_update_hp(data):
     emit("hp_updated", {"id": tid, "hp": new_hp, "max_hp": token["max_hp"]}, room=code)
 
 
+@socketio.on("update_token")
+def on_update_token(data):
+    info = socket_info.get(request.sid)
+    if not info:
+        return
+    code = info["code"]
+    sess = sessions[code]
+    tid = data.get("id")
+    if tid not in sess["tokens"]:
+        return
+    token = sess["tokens"][tid]
+    # Players can only edit their own token
+    if info["role"] != "dm" and token.get("player_id") != info.get("player_uuid"):
+        return
+    if "name" in data:
+        token["name"] = str(data["name"])[:50] or token["name"]
+    if "color" in data:
+        token["color"] = str(data["color"])
+    if "image_url" in data:
+        token["image_url"] = data["image_url"] or None
+    if "size" in data:
+        token["size"] = max(1, min(4, int(data["size"])))
+    if "hp" in data:
+        token["hp"] = max(0, int(data["hp"]))
+    if "max_hp" in data:
+        token["max_hp"] = max(1, int(data["max_hp"]))
+        token["hp"] = min(token["hp"], token["max_hp"])
+    if info["role"] == "dm":
+        if "is_player" in data:
+            token["is_player"] = bool(data["is_player"])
+        if "player_id" in data:
+            token["player_id"] = _resolve_player_id(data["player_id"], sess)
+    db_upsert_token(token, code)
+    emit("token_updated", token, room=code)
+
+
 @socketio.on("update_token_initiative")
 def on_update_initiative(data):
     info = socket_info.get(request.sid)

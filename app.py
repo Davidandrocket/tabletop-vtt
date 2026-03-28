@@ -1,3 +1,6 @@
+from gevent import monkey
+monkey.patch_all()
+
 import os
 import json
 import uuid
@@ -17,8 +20,8 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 DICECLOUD_BASE = "https://dicecloud.com/api"
-DB_PATH = os.path.join(os.path.dirname(__file__), "sessions.db")
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "static", "uploads")
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "sessions.db"))
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", os.path.join(os.path.dirname(__file__), "static", "uploads"))
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 
 # --- In-memory state (ephemeral per-connection data only) ---

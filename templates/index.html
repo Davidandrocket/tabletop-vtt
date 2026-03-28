@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DiceCloud VTT</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="landing">
+  <div class="landing-container">
+    <h1>DiceCloud VTT</h1>
+    <p class="subtitle">A virtual tabletop powered by DiceCloud</p>
+
+    {% if error %}
+    <div class="error-banner">{{ error }}</div>
+    {% endif %}
+
+    <div class="landing-cards">
+      <div class="card">
+        <h2>Start a Session</h2>
+        <p>Create a new session as DM. You'll get a code to share with your players.</p>
+        <form action="/create" method="post">
+          <input type="text" name="name" placeholder="Your name (DM)" maxlength="30" required>
+          <button type="submit" class="btn-primary">Create Session</button>
+        </form>
+      </div>
+
+      <div class="divider">or</div>
+
+      <div class="card">
+        <h2>Join a Session</h2>
+        <p>Enter the code your DM shared with you.</p>
+        <form action="/join" method="post">
+          <input type="text" name="code" placeholder="Session code" maxlength="6"
+                 style="text-transform:uppercase" required>
+          <input type="text" name="name" placeholder="Your name" maxlength="30" required>
+          <button type="submit" class="btn-primary">Join Session</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

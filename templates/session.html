@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VTT — {{ code }}</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="vtt" data-role="{{ role }}" data-code="{{ code }}" data-name="{{ name }}">
+
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="session-code">Session: <strong>{{ code }}</strong></span>
+      <span class="role-badge role-{{ role }}">{{ role.upper() }}</span>
+    </div>
+    <div class="topbar-center">
+      <span id="turn-indicator" class="turn-indicator hidden"></span>
+    </div>
+    <div class="topbar-right">
+      <span id="connection-status" class="status-dot connecting" title="Connecting..."></span>
+      <span id="player-count">0 online</span>
+    </div>
+  </header>
+
+  <!-- Main layout -->
+  <div class="vtt-layout">
+
+    <!-- Left panel: character sheet / party -->
+    <aside class="panel panel-left" id="char-panel">
+      <div class="panel-header">
+        <span>{% if role == 'dm' %}Party{% else %}Character{% endif %}</span>
+        <button class="panel-toggle" onclick="togglePanel('char-panel')">◀</button>
+      </div>
+      <div class="panel-body">
+
+        <!-- DM party panel -->
+        {% if role == 'dm' %}
+        <div id="party-panel">
+          <div id="party-list">
+            <div id="party-empty" class="party-empty">No characters loaded yet.</div>
+          </div>
+        </div>
+        {% endif %}
+
+        <!-- Dicecloud login (players only) -->
+        {% if role == 'player' %}
+        <div id="dc-login-section">
+          <h3>Load from DiceCloud</h3>
+          <input id="dc-username" type="text" placeholder="Username" autocomplete="username">
+          <input id="dc-password" type="password" placeholder="Password" autocomplete="current-password">
+          <input id="dc-char-id" type="text" placeholder="Character ID (from URL)">
+          <button class="btn-primary" onclick="dcLogin()">Load Character</button>
+          <div id="dc-error" class="error-text hidden"></div>
+        </div>
+        {% endif %}
+
+        <!-- Character stats (populated by JS) -->
+        <div id="char-stats" class="hidden">
+          <div class="char-header">
+            <img id="char-avatar" src="" alt="" class="avatar hidden">
+            <div>
+              <div id="char-name" class="char-name"></div>
+              <div id="char-class" class="char-class"></div>
+            </div>
+          </div>
+          {% if role == 'player' %}
+          <button id="refresh-char-btn" class="btn-sm refresh-char-btn" onclick="refreshCharacter()">↻ Update</button>
+          {% endif %}
+
+          <div class="stat-row">
+            <div class="stat-box" title="Armor Class"><div class="stat-val" id="stat-ac">—</div><div class="stat-lbl">AC</div></div>
+            <div class="stat-box" title="Speed"><div class="stat-val" id="stat-speed">—</div><div class="stat-lbl">Speed</div></div>
+            <div class="stat-box" title="Initiative Bonus"><div class="stat-val" id="stat-init">—</div><div class="stat-lbl">Init</div></div>
+            <div class="stat-box" title="Proficiency Bonus"><div class="stat-val" id="stat-prof">—</div><div class="stat-lbl">Prof</div></div>
+          </div>
+
+          <h4>Ability Scores</h4>
+          <div class="ability-grid" id="ability-grid"></div>
+
+          <h4>Saving Throws</h4>
+          <div class="save-list" id="save-list"></div>
+
+          <h4>Skills</h4>
+          <div class="skill-list" id="skill-list"></div>
+
+          <div id="resources-section" class="hidden">
+            <h4>Resources</h4>
+            <div id="resource-list"></div>
+          </div>
+
+          <div id="spellslots-section" class="hidden">
+            <h4>Spell Slots</h4>
+            <div id="spellslot-list"></div>
+          </div>
+
+          <div id="conditions-section" class="hidden">
+            <h4>Active Effects</h4>
+            <div id="conditions-list"></div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+    <!-- Center: battle map -->
+    <main class="map-area">
+      <div id="map-container"></div>
+
+      <!-- DM map controls -->
+      {% if role == 'dm' %}
+      <div class="map-controls">
+        <button class="btn-sm" onclick="openAddToken()">+ Token</button>
+        <button class="btn-sm btn-danger" id="remove-token-btn" onclick="removeSelected()" disabled>Remove</button>
+        <span class="sep">|</span>
+        <button class="btn-sm btn-green" onclick="startCombat()">Start Combat</button>
+        <button class="btn-sm" onclick="nextTurn()" id="next-turn-btn" disabled>Next Turn</button>
+        <button class="btn-sm btn-danger" onclick="endCombat()" id="end-combat-btn" disabled>End Combat</button>
+        <span class="sep">|</span>
+        <label class="grid-size-label">Grid
+          <input id="grid-cols" type="number" value="20" min="5" max="50" class="grid-size-input">
+          ×
+          <input id="grid-rows" type="number" value="15" min="5" max="50" class="grid-size-input">
+        </label>
+        <button class="btn-sm" onclick="applyGridSize()">Apply</button>
+      </div>
+      {% endif %}
+
+      <!-- DM map image controls -->
+      {% if role == 'dm' %}
+      <div class="map-controls map-controls-img">
+        <input id="map-image-input" type="file" accept="image/*" class="map-file-input">
+        <button id="upload-map-btn" class="btn-sm" onclick="uploadMapImage()">Upload</button>
+        <span id="map-image-error" class="error-text hidden"></span>
+        <div id="map-nudge-controls" class="map-nudge-row hidden">
+          <span class="sep">|</span>
+          <span class="grid-size-label">Offset</span>
+          <button class="btn-sm map-nudge" onclick="nudgeMap(-1, 0, event)" title="Left (Shift=×10)">◀</button>
+          <button class="btn-sm map-nudge" onclick="nudgeMap(1, 0, event)" title="Right (Shift=×10)">▶</button>
+          <button class="btn-sm map-nudge" onclick="nudgeMap(0, -1, event)" title="Up (Shift=×10)">▲</button>
+          <button class="btn-sm map-nudge" onclick="nudgeMap(0, 1, event)" title="Down (Shift=×10)">▼</button>
+          <input id="map-offset-x" type="number" value="0" class="grid-size-input" title="X offset (px)">
+          <input id="map-offset-y" type="number" value="0" class="grid-size-input" title="Y offset (px)">
+          <span class="sep">|</span>
+          <button class="btn-sm btn-danger" onclick="clearMapImage()">Clear Map</button>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Reset view button (always visible) -->
+      <button class="btn-sm map-reset-btn" onclick="resetMapView()" title="Reset view (Home key)">⌖</button>
+
+      <!-- Selected token HP editor -->
+      <div id="token-hp-editor" class="token-hp-editor hidden">
+        <span id="hp-token-name"></span>
+        <button onclick="adjustHp(-1)">−</button>
+        <span id="hp-display"></span>
+        <button onclick="adjustHp(1)">+</button>
+        <input id="hp-input" type="number" placeholder="Set HP">
+        <button onclick="setHp()">Set</button>
+      </div>
+    </main>
+
+    <!-- Right panel: initiative + dice + chat -->
+    <aside class="panel panel-right" id="right-panel">
+      <div class="panel-header">
+        <button class="panel-toggle" onclick="togglePanel('right-panel')">▶</button>
+        <span>Combat &amp; Chat</span>
+      </div>
+      <div class="panel-body">
+
+        <div class="section-block">
+          <h3>Initiative</h3>
+          <div id="initiative-list" class="initiative-list"></div>
+          {% if role == 'dm' %}
+          <div id="initiative-inputs" class="initiative-inputs"></div>
+          {% endif %}
+        </div>
+
+        <div class="section-block">
+          <h3>Dice Roller</h3>
+          <div class="dice-row">
+            <input id="dice-notation" type="text" value="1d20" placeholder="e.g. 2d6+3">
+            <button class="btn-primary" onclick="rollDice()">Roll</button>
+          </div>
+          <div class="dice-presets">
+            <button onclick="quickRoll('1d4')">d4</button>
+            <button onclick="quickRoll('1d6')">d6</button>
+            <button onclick="quickRoll('1d8')">d8</button>
+            <button onclick="quickRoll('1d10')">d10</button>
+            <button onclick="quickRoll('1d12')">d12</button>
+            <button onclick="quickRoll('1d20')">d20</button>
+            <button onclick="quickRoll('1d100')">d100</button>
+          </div>
+        </div>
+
+        <div class="section-block chat-section">
+          <h3>Chat</h3>
+          <div id="chat-log" class="chat-log"></div>
+          <div class="chat-input-row">
+            <input id="chat-input" type="text" placeholder="Message..." maxlength="500"
+                   onkeydown="if(event.key==='Enter') sendChat()">
+            <button onclick="sendChat()">Send</button>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Add Token Modal (DM only) -->
+  {% if role == 'dm' %}
+  <div id="add-token-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>Add Token</h3>
+      <label>Name <input id="tok-name" type="text" value="Goblin"></label>
+      <label>HP <input id="tok-hp" type="number" value="10" min="1"></label>
+      <label>Max HP <input id="tok-maxhp" type="number" value="10" min="1"></label>
+      <label>Color <input id="tok-color" type="color" value="#e74c3c"></label>
+      <label>Size
+        <select id="tok-size">
+          <option value="1">1×1 — Small / Medium</option>
+          <option value="2">2×2 — Large</option>
+          <option value="3">3×3 — Huge</option>
+          <option value="4">4×4 — Gargantuan</option>
+        </select>
+      </label>
+      <label>Image URL <span style="color:var(--text-dim);font-size:0.75rem">(optional)</span>
+        <input id="tok-image" type="text" placeholder="https://...">
+      </label>
+      <label class="checkbox-label">
+        <input id="tok-isplayer" type="checkbox"> Player token
+      </label>
+      <div id="tok-player-select-wrap" class="hidden">
+        <label>Assign to player
+          <select id="tok-player-select"></select>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-primary" onclick="submitAddToken()">Add</button>
+        <button onclick="closeModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Initiative input Modal -->
+  {% if role == 'dm' %}
+  <div id="initiative-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>Set Initiatives</h3>
+      <div id="initiative-form"></div>
+      <div class="modal-actions">
+        <button class="btn-primary" onclick="submitInitiatives()">Start Combat</button>
+        <button onclick="document.getElementById('initiative-modal').classList.add('hidden')">Cancel</button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="https://unpkg.com/konva@9/konva.min.js"></script>
+  <script src="/static/js/map.js"></script>
+  <script src="/static/js/main.js"></script>
+</body>
+</html>

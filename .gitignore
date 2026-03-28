@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+sessions.db
+static/uploads/
+creature_dump.json

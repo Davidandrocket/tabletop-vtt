@@ -39,7 +39,9 @@ let sessionTokens = {};     // token_id -> token
 let initiativeOrder = [];
 let currentTurn = -1;
 let onlinePlayers = {};     // sid -> { name }
-let partyCharacters = {};   // player_uuid -> { player_sid, character }
+let partyCharacters = {};   // character_id -> { player_uuid, player_sid, character }
+let playerCharacters = {};  // character_id -> char_data  (this player's own chars)
+let currentCharId = null;   // which character sheet is currently displayed
 // selectedTokenId is declared in map.js — shared global scope
 
 // --- Socket setup ---
@@ -249,33 +251,33 @@ socket.on("dicecloud_error", (data) => {
 
 function renderPartyPanel(entries) {
   for (const entry of entries) {
-    partyCharacters[entry.player_uuid] = {
+    const key = entry.character_id || entry.player_uuid;
+    partyCharacters[key] = {
+      player_uuid: entry.player_uuid,
       player_sid: entry.player_sid || null,
       character: entry.character,
     };
   }
   const list = document.getElementById("party-list");
   if (!list) return;
-  // Clear and rebuild all cards
   list.innerHTML = "";
-  const uuids = Object.keys(partyCharacters);
-  if (uuids.length === 0) {
+  const keys = Object.keys(partyCharacters);
+  if (keys.length === 0) {
     list.innerHTML = '<div id="party-empty" class="party-empty">No characters loaded yet.</div>';
     return;
   }
-  for (const uuid of uuids) {
-    list.appendChild(buildPartyCard(uuid));
+  for (const key of keys) {
+    list.appendChild(buildPartyCard(key));
   }
 }
 
-function upsertPartyCard(uuid) {
+function upsertPartyCard(key) {
   const list = document.getElementById("party-list");
   if (!list) return;
-  // Remove empty state
   const empty = document.getElementById("party-empty");
   if (empty) empty.remove();
-  const existing = document.getElementById(`party-card-${uuid}`);
-  const card = buildPartyCard(uuid);
+  const existing = document.getElementById(`party-card-${key}`);
+  const card = buildPartyCard(key);
   if (existing) {
     existing.replaceWith(card);
   } else {
@@ -283,8 +285,8 @@ function upsertPartyCard(uuid) {
   }
 }
 
-function buildPartyCard(uuid) {
-  const entry = partyCharacters[uuid];
+function buildPartyCard(key) {
+  const entry = partyCharacters[key];
   const char = entry.character;
 
   const classStr = (char.class_levels || [])
@@ -296,7 +298,7 @@ function buildPartyCard(uuid) {
 
   const card = document.createElement("div");
   card.className = "party-card";
-  card.id = `party-card-${uuid}`;
+  card.id = `party-card-${key}`;
 
   // Header: avatar + name/class/player
   const header = document.createElement("div");
@@ -347,14 +349,14 @@ function buildPartyCard(uuid) {
   const btn = document.createElement("button");
   btn.className = "btn-primary btn-sm party-spawn-btn";
   btn.textContent = "Spawn Token";
-  btn.onclick = () => spawnCharacterToken(uuid);
+  btn.onclick = () => spawnCharacterToken(key);
   card.appendChild(btn);
 
   return card;
 }
 
-function spawnCharacterToken(uuid) {
-  const entry = partyCharacters[uuid];
+function spawnCharacterToken(key) {
+  const entry = partyCharacters[key];
   if (!entry) return;
   const char = entry.character;
   openAddToken({
@@ -370,18 +372,25 @@ function spawnCharacterToken(uuid) {
 
 // --- Character sheet ---
 
-socket.on("character_loaded", (char) => {
-  renderCharacterSheet(char);
+socket.on("character_loaded", (data) => {
+  const charId = data.character_id;
+  const char   = data.character;
+  playerCharacters[charId] = char;
+  addOrUpdateCharTab(charId, char.name);
+  // Auto-switch to first character; update display if re-loading current
+  if (!currentCharId || currentCharId === charId) switchToCharacter(charId);
   resetRefreshBtn();
 });
 
 socket.on("character_shared", (data) => {
   if (ROLE !== "dm") return;
-  partyCharacters[data.player_uuid] = {
+  const key = data.character_id || data.player_uuid;
+  partyCharacters[key] = {
+    player_uuid: data.player_uuid,
     player_sid: data.player_sid,
     character: data.character,
   };
-  upsertPartyCard(data.player_uuid);
+  upsertPartyCard(key);
 });
 
 function renderCharacterSheet(char) {
@@ -401,6 +410,9 @@ function renderCharacterSheet(char) {
   if (char.avatar) {
     avatarEl.src = char.avatar;
     avatarEl.classList.remove("hidden");
+  } else {
+    avatarEl.src = "";
+    avatarEl.classList.add("hidden");
   }
 
   // Top stats
@@ -503,14 +515,49 @@ function renderCharacterSheet(char) {
   }
 }
 
+// --- Character tabs ---
+
+function addOrUpdateCharTab(charId, name) {
+  const bar  = document.getElementById("char-tabs-bar");
+  const tabs = document.getElementById("char-tabs");
+  if (!bar || !tabs) return;
+  bar.classList.remove("hidden");
+  let tab = document.getElementById(`char-tab-${charId}`);
+  if (!tab) {
+    tab = document.createElement("button");
+    tab.id = `char-tab-${charId}`;
+    tab.className = "char-tab";
+    tab.onclick = () => switchToCharacter(charId);
+    tabs.appendChild(tab);
+  }
+  tab.textContent = name;
+}
+
+function switchToCharacter(charId) {
+  currentCharId = charId;
+  document.querySelectorAll(".char-tab").forEach(t => {
+    t.classList.toggle("active", t.id === `char-tab-${charId}`);
+  });
+  document.getElementById("dc-login-section")?.classList.add("hidden");
+  const char = playerCharacters[charId];
+  if (char) renderCharacterSheet(char);
+}
+
+function showDcLoginForm() {
+  document.getElementById("dc-login-section")?.classList.remove("hidden");
+  document.getElementById("char-stats")?.classList.add("hidden");
+  document.querySelectorAll(".char-tab").forEach(t => t.classList.remove("active"));
+}
+
 // --- DiceCloud login / refresh ---
 
 function refreshCharacter() {
+  if (!currentCharId) return;
   const btn = document.getElementById("refresh-char-btn");
   if (btn) { btn.disabled = true; btn.textContent = "↻ Updating..."; }
   const errEl = document.getElementById("dc-error");
   if (errEl) errEl.classList.add("hidden");
-  socket.emit("refresh_character");
+  socket.emit("refresh_character", { character_id: currentCharId });
 }
 
 function resetRefreshBtn() {

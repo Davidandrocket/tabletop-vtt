@@ -33,6 +33,13 @@
         <span>{% if role == 'dm' %}Party{% else %}Character{% endif %}</span>
         <button class="panel-toggle" onclick="togglePanel('char-panel')">◀</button>
       </div>
+      {% if role == 'player' %}
+      <div id="char-tabs-bar" class="char-tabs-bar hidden">
+        <div id="char-tabs" class="char-tabs"></div>
+        <button class="char-tab-add" onclick="showDcLoginForm()" title="Add character">＋</button>
+      </div>
+      {% endif %}
+
       <div class="panel-body">
 
         <!-- DM party panel -->

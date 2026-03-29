@@ -94,10 +94,29 @@ def init_db():
             CREATE TABLE IF NOT EXISTS player_characters (
                 session_code   TEXT,
                 player_uuid    TEXT,
+                character_id   TEXT NOT NULL DEFAULT '',
                 character_data TEXT,
-                PRIMARY KEY (session_code, player_uuid)
+                PRIMARY KEY (session_code, player_uuid, character_id)
             )
         """)
+        # Migration: if old table lacks character_id column, recreate with it in the PK
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(player_characters)").fetchall()}
+        if "character_id" not in cols:
+            conn.execute("""
+                CREATE TABLE player_characters_new (
+                    session_code   TEXT,
+                    player_uuid    TEXT,
+                    character_id   TEXT NOT NULL DEFAULT '',
+                    character_data TEXT,
+                    PRIMARY KEY (session_code, player_uuid, character_id)
+                )
+            """)
+            conn.execute("""
+                INSERT INTO player_characters_new (session_code, player_uuid, character_id, character_data)
+                SELECT session_code, player_uuid, '', character_data FROM player_characters
+            """)
+            conn.execute("DROP TABLE player_characters")
+            conn.execute("ALTER TABLE player_characters_new RENAME TO player_characters")
 
 
 def db_session_exists(code):
@@ -218,32 +237,41 @@ def db_load_session(code):
     return True
 
 
-def db_save_character(code, player_uuid, parsed):
+def db_save_character(code, player_uuid, character_id, parsed):
     with get_db() as conn:
         conn.execute("""
-            INSERT OR REPLACE INTO player_characters (session_code, player_uuid, character_data)
-            VALUES (?, ?, ?)
-        """, (code, player_uuid, json.dumps(parsed)))
+            INSERT OR REPLACE INTO player_characters
+                (session_code, player_uuid, character_id, character_data)
+            VALUES (?, ?, ?, ?)
+        """, (code, player_uuid, character_id, json.dumps(parsed)))
 
 
-def db_load_character(code, player_uuid):
+def db_load_characters_for_player(code, player_uuid):
+    """Return all characters loaded by a specific player in this session."""
     conn = get_db()
-    row = conn.execute(
-        "SELECT character_data FROM player_characters WHERE session_code = ? AND player_uuid = ?",
+    rows = conn.execute(
+        "SELECT character_id, character_data FROM player_characters WHERE session_code = ? AND player_uuid = ?",
         (code, player_uuid),
-    ).fetchone()
-    return json.loads(row["character_data"]) if row else None
+    ).fetchall()
+    return [
+        {"character_id": row["character_id"], "character": json.loads(row["character_data"])}
+        for row in rows
+    ]
 
 
 def db_load_all_characters(code):
-    """Return all party characters for a session with their player_uuid."""
+    """Return all party characters for a session with player_uuid and character_id."""
     conn = get_db()
     rows = conn.execute(
-        "SELECT player_uuid, character_data FROM player_characters WHERE session_code = ?",
+        "SELECT player_uuid, character_id, character_data FROM player_characters WHERE session_code = ?",
         (code,)
     ).fetchall()
     return [
-        {"player_uuid": row["player_uuid"], "character": json.loads(row["character_data"])}
+        {
+            "player_uuid": row["player_uuid"],
+            "character_id": row["character_id"],
+            "character": json.loads(row["character_data"]),
+        }
         for row in rows
     ]
 
@@ -385,9 +413,7 @@ def on_connect():
         sess["players"][request.sid] = {
             "name": name,
             "player_uuid": player_uuid,
-            "character_id": None,
-            "dicecloud_token": None,
-            "character_data": None,
+            "characters": {},  # character_id -> {dicecloud_token, character_data}
         }
 
     # Build party characters list for DM
@@ -417,16 +443,21 @@ def on_connect():
     emit("player_joined", {"name": name, "role": role, "sid": request.sid, "uuid": player_uuid},
          room=code, include_self=False)
 
-    # Restore character sheet for returning players; also notify DM of fresh SID
+    # Restore all character sheets for returning players; notify DM of each
     if role == "player" and player_uuid:
-        char_data = db_load_character(code, player_uuid)
-        if char_data:
-            emit("character_loaded", char_data)
-            dm_socket = sess.get("dm_socket")
+        chars = db_load_characters_for_player(code, player_uuid)
+        player = sess["players"][request.sid]
+        dm_socket = sess.get("dm_socket")
+        for entry in chars:
+            char_id = entry["character_id"]
+            char_data = entry["character"]
+            player["characters"][char_id] = {"dicecloud_token": None, "character_data": char_data}
+            emit("character_loaded", {"character_id": char_id, "character": char_data})
             if dm_socket:
                 emit("character_shared", {
                     "player_uuid": player_uuid,
                     "player_sid": request.sid,
+                    "character_id": char_id,
                     "character": char_data,
                 }, room=dm_socket)
 
@@ -783,34 +814,29 @@ def on_dicecloud_login(data):
         code = info["code"]
         sess = sessions[code]
         if request.sid in sess["players"]:
-            sess["players"][request.sid].update({
-                "character_id": character_id,
+            sess["players"][request.sid]["characters"][character_id] = {
                 "dicecloud_token": token,
                 "character_data": parsed,
-            })
+            }
 
-        emit("character_loaded", parsed)
-
-        # Tag the character with the player's session name before persisting
         parsed["player_name"] = info["name"]
+        emit("character_loaded", {"character_id": character_id, "character": parsed})
 
-        # Persist so the sheet survives reloads
         player_uuid = info.get("player_uuid")
         if player_uuid:
-            db_save_character(code, player_uuid, parsed)
-            # Notify DM of the newly loaded character
+            db_save_character(code, player_uuid, character_id, parsed)
             dm_socket = sess.get("dm_socket")
             if dm_socket:
                 emit("character_shared", {
                     "player_uuid": player_uuid,
                     "player_sid": request.sid,
+                    "character_id": character_id,
                     "character": parsed,
                 }, room=dm_socket)
 
-        # Sync name/HP to player's token if one exists
+        # Sync HP to the matching named token if one exists
         for t in sess["tokens"].values():
-            if t.get("player_id") == player_uuid:
-                t["name"] = parsed["name"]
+            if t.get("player_id") == player_uuid and t.get("name", "").lower() == parsed["name"].lower():
                 t["max_hp"] = parsed["hp"]["max"]
                 t["hp"] = min(t["hp"], parsed["hp"]["max"])
                 db_upsert_token(t, code)
@@ -824,18 +850,22 @@ def on_dicecloud_login(data):
 
 
 @socketio.on("refresh_character")
-def on_refresh_character():
+def on_refresh_character(data=None):
     info = socket_info.get(request.sid)
     if not info or info["role"] != "player":
         return
     code = info["code"]
     sess = sessions[code]
     player = sess["players"].get(request.sid, {})
-    dc_token = player.get("dicecloud_token")
-    character_id = player.get("character_id")
 
-    if not dc_token or not character_id:
+    character_id = (data or {}).get("character_id")
+    char_entry = player.get("characters", {}).get(character_id) if character_id else None
+    if not char_entry:
         emit("dicecloud_error", {"message": "No character loaded yet — use the login form first."})
+        return
+    dc_token = char_entry.get("dicecloud_token")
+    if not dc_token:
+        emit("dicecloud_error", {"message": "DiceCloud session expired — please re-enter your credentials."})
         return
 
     try:
@@ -847,24 +877,24 @@ def on_refresh_character():
         char_resp.raise_for_status()
         parsed = parse_character(char_resp.json(), character_id)
 
-        player["character_data"] = parsed
-        emit("character_loaded", parsed)
-
+        char_entry["character_data"] = parsed
         parsed["player_name"] = info["name"]
+        emit("character_loaded", {"character_id": character_id, "character": parsed})
+
         player_uuid = info.get("player_uuid")
         if player_uuid:
-            db_save_character(code, player_uuid, parsed)
+            db_save_character(code, player_uuid, character_id, parsed)
             dm_socket = sess.get("dm_socket")
             if dm_socket:
                 emit("character_shared", {
                     "player_uuid": player_uuid,
                     "player_sid": request.sid,
+                    "character_id": character_id,
                     "character": parsed,
                 }, room=dm_socket)
 
         for t in sess["tokens"].values():
-            if t.get("player_id") == player_uuid:
-                t["name"] = parsed["name"]
+            if t.get("player_id") == player_uuid and t.get("name", "").lower() == parsed["name"].lower():
                 t["max_hp"] = parsed["hp"]["max"]
                 t["hp"] = min(t["hp"], parsed["hp"]["max"])
                 db_upsert_token(t, code)

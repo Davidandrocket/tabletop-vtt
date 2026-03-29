@@ -202,6 +202,7 @@ body.vtt { display: flex; flex-direction: column; }
 
 .panel.collapsed { width: 36px; }
 .panel.collapsed .panel-body { display: none; }
+.panel.collapsed .char-tabs-bar { display: none; }
 .panel.collapsed .panel-header { padding: 8px 2px; justify-content: center; }
 .panel.collapsed .panel-header span { display: none; }
 
@@ -240,6 +241,57 @@ body.vtt { display: flex; flex-direction: column; }
 .panel-body::-webkit-scrollbar { width: 4px; }
 .panel-body::-webkit-scrollbar-track { background: transparent; }
 .panel-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Character tabs bar ── */
+.char-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.char-tabs-bar::-webkit-scrollbar { height: 2px; }
+.char-tabs-bar::-webkit-scrollbar-thumb { background: var(--border); }
+.char-tabs {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+  overflow-x: auto;
+}
+.char-tab {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  white-space: nowrap;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.char-tab:hover { border-color: var(--border); color: var(--text); background: none; }
+.char-tab.active {
+  background: var(--panel);
+  border-color: var(--accent2);
+  color: var(--text);
+}
+.char-tab-add {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 1rem;
+  line-height: 1;
+  width: 22px; height: 22px;
+  padding: 0;
+  border-radius: var(--radius);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.char-tab-add:hover { color: var(--text); border-color: var(--accent2); background: none; }
 
 /* ── Map area ── */
 .map-area {

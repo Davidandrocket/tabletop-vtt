@@ -73,7 +73,11 @@ def init_db():
             )
         """)
         # Migrations: add columns introduced after initial schema
-        for col, defn in [("image_url", "TEXT"), ("size", "INTEGER DEFAULT 1")]:
+        for col, defn in [
+            ("image_url", "TEXT"),
+            ("size",      "INTEGER DEFAULT 1"),
+            ("hidden",    "INTEGER DEFAULT 0"),
+        ]:
             try:
                 conn.execute(f"ALTER TABLE tokens ADD COLUMN {col} {defn}")
             except sqlite3.OperationalError:
@@ -156,8 +160,8 @@ def db_upsert_token(token, code):
             INSERT OR REPLACE INTO tokens
                 (id, session_code, name, x, y, hp, max_hp,
                  color, is_player, player_id, initiative, conditions,
-                 image_url, size)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 image_url, size, hidden)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             token["id"], code, token["name"],
             token["x"], token["y"],
@@ -169,6 +173,7 @@ def db_upsert_token(token, code):
             json.dumps(token.get("conditions", [])),
             token.get("image_url"),
             token.get("size", 1),
+            1 if token.get("hidden") else 0,
         ))
 
 
@@ -214,6 +219,7 @@ def db_load_session(code):
     for t in token_rows:
         token = dict(t)
         token["is_player"] = bool(token["is_player"])
+        token["hidden"]    = bool(token.get("hidden", 0))
         token["conditions"] = json.loads(token.get("conditions") or "[]")
         tokens[token["id"]] = token
 
@@ -303,6 +309,7 @@ def make_token(name, x=0, y=0, hp=10, max_hp=10, color="#e74c3c",
         "conditions": [],
         "image_url": image_url,
         "size": size,
+        "hidden": False,
     }
 
 
@@ -428,9 +435,11 @@ def on_connect():
         for entry in party_chars:
             entry["player_sid"] = uuid_to_sid.get(entry["player_uuid"])
 
+    visible_tokens = list(sess["tokens"].values()) if role == "dm" else \
+                     [t for t in sess["tokens"].values() if not t.get("hidden")]
     emit("session_state", {
         "role": role,
-        "tokens": list(sess["tokens"].values()),
+        "tokens": visible_tokens,
         "initiative_order": sess["initiative_order"],
         "current_turn": sess["current_turn"],
         "map": sess["map"],
@@ -610,6 +619,8 @@ def on_update_token(data):
             token["is_player"] = bool(data["is_player"])
         if "player_id" in data:
             token["player_id"] = _resolve_player_id(data["player_id"], sess)
+        if "hidden" in data:
+            token["hidden"] = bool(data["hidden"])
     db_upsert_token(token, code)
     emit("token_updated", token, room=code)
 

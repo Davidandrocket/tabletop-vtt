@@ -143,6 +143,15 @@ socket.on("token_moved", (data) => {
 });
 
 socket.on("token_updated", (token) => {
+  // Players never see hidden tokens
+  if (ROLE !== "dm" && token.hidden) {
+    if (sessionTokens[token.id]) {
+      removeTokenFromMap(token.id);
+      delete sessionTokens[token.id];
+    }
+    return;
+  }
+
   const old = sessionTokens[token.id];
   sessionTokens[token.id] = token;
   // Rebuild if size or image changed — simple update can't handle those
@@ -735,6 +744,7 @@ function openEditToken(tokenId) {
 
   const playerSection = document.getElementById("edit-tok-player-section");
   if (ROLE === "dm") {
+    document.getElementById("edit-tok-hidden").checked = !!token.hidden;
     playerSection.classList.remove("hidden");
     const select = document.getElementById("edit-tok-player-select");
     select.innerHTML = "";
@@ -791,6 +801,7 @@ function submitEditToken() {
   if (ROLE === "dm") {
     data.is_player = isPlayer;
     data.player_id = isPlayer ? document.getElementById("edit-tok-player-select").value : null;
+    data.hidden = document.getElementById("edit-tok-hidden").checked;
   }
   socket.emit("update_token", data);
   closeModal();

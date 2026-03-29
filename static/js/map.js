@@ -294,6 +294,8 @@ function addTokenToMap(token) {
     window.socketEmit("move_token", { id: token.id, x: newX, y: newY });
   });
 
+  if (token.hidden) group.opacity(0.4);
+
   renderConditionIcons(group, token, radius);
   tokenNodes[token.id] = group;
   tokenLayer.add(group);
@@ -337,6 +339,8 @@ function updateTokenOnMap(token) {
   // Only update fill color for non-image tokens
   const bodyFill = group.findOne(".body-fill");
   if (bodyFill) bodyFill.fill(token.color || "#e74c3c");
+
+  group.opacity(token.hidden ? 0.4 : 1);
 
   renderConditionIcons(group, token, radius);
   tokenLayer.batchDraw();

@@ -721,8 +721,8 @@ function submitAddToken() {
     image_url: document.getElementById("tok-image").value.trim() || null,
     is_player: isPlayer,
     player_id: playerId,
-    x: 0,
-    y: 0,
+    x: window.getViewportCenterCell?.().col ?? 0,
+    y: window.getViewportCenterCell?.().row ?? 0,
   });
   closeModal();
 }

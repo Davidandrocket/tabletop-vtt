@@ -519,6 +519,19 @@ function getSelectedTokenId()  { return selectedTokenId; }
 function getSelectedTokenIds() { return [...selectedTokenIds]; }
 window.getSelectedTokenIds = getSelectedTokenIds;
 
+function getViewportCenterCell() {
+  const container = document.getElementById("map-container");
+  const scale = stage.scaleX();
+  const pos   = stage.position();
+  const worldX = (container.clientWidth  / 2 - pos.x) / scale;
+  const worldY = (container.clientHeight / 2 - pos.y) / scale;
+  return {
+    col: Math.max(0, Math.floor(worldX / GRID)),
+    row: Math.max(0, Math.floor(worldY / GRID)),
+  };
+}
+window.getViewportCenterCell = getViewportCenterCell;
+
 function setMapImage(url, offsetX, offsetY, scaleX = 1, scaleY = 1) {
   currentMapImage = { url, offsetX, offsetY, scaleX, scaleY };
   const gen = ++mapImageLoadGen;

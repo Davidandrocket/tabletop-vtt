@@ -21,6 +21,7 @@ body {
   background: var(--bg);
   color: var(--text);
   height: 100vh;
+  height: 100dvh; /* actual visible height on mobile (excludes browser chrome) */
   overflow: hidden;
 }
 

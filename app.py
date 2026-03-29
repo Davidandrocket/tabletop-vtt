@@ -768,7 +768,7 @@ def on_ping(data):
 @socketio.on("add_spell_shape")
 def on_add_spell_shape(data):
     info = socket_info.get(request.sid)
-    if not info or info["role"] != "dm":
+    if not info:
         return
     code = info["code"]
     sess = sessions.get(code)
@@ -782,10 +782,25 @@ def on_add_spell_shape(data):
     emit("spell_shape_added", shape, room=code)
 
 
+@socketio.on("update_spell_shape")
+def on_update_spell_shape(data):
+    info = socket_info.get(request.sid)
+    if not info:
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    shape_id = data.get("id")
+    if shape_id and shape_id in sess.get("spell_shapes", {}):
+        sess["spell_shapes"][shape_id] = {**data}
+        emit("spell_shape_added", data, room=code)  # reuse upsert event on clients
+
+
 @socketio.on("remove_spell_shape")
 def on_remove_spell_shape(data):
     info = socket_info.get(request.sid)
-    if not info or info["role"] != "dm":
+    if not info:
         return
     code = info["code"]
     sess = sessions.get(code)

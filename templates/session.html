@@ -156,8 +156,7 @@
       {% endif %}
 
       <!-- Map tool buttons (always visible) -->
-      {% if role == 'dm' %}
-      <button id="spell-btn" class="btn-sm map-tool-btn map-spell-btn" onclick="toggleSpellMode()" title="Spell overlay (drag to draw AoE shapes; click a shape to remove it)">
+      <button id="spell-btn" class="btn-sm map-tool-btn map-spell-btn" onclick="toggleSpellMode()" title="Spell overlay (drag to draw AoE shapes)">
         <img src="/static/tools/spell.svg" alt="Spell" width="16" height="16">
       </button>
       <div id="spell-picker" class="spell-picker hidden">
@@ -176,9 +175,11 @@
           <div class="spell-color-swatch" data-color="#9b59b6" style="background:#9b59b6" onclick="window.setSpellShapeColor('#9b59b6')" title="Purple"></div>
           <input type="color" id="spell-color-input" value="#e74c3c" oninput="window.setSpellShapeColor(this.value)" title="Custom color">
         </div>
-        <button class="btn-sm btn-danger" style="font-size:0.75rem;padding:3px 8px" onclick="window.socketEmit('clear_spell_shapes', {})" title="Remove all overlays">Clear All</button>
+        <div class="spell-picker-actions">
+          <button id="spell-delete-btn" class="btn-sm btn-danger" style="display:none;font-size:0.75rem;padding:3px 8px" onclick="window.deleteSelectedSpellShape()" title="Delete selected shape (Del)">Delete</button>
+          {% if role == 'dm' %}<button class="btn-sm btn-danger" style="font-size:0.75rem;padding:3px 8px" onclick="window.socketEmit('clear_spell_shapes', {})" title="Remove all overlays">Clear All</button>{% endif %}
+        </div>
       </div>
-      {% endif %}
       <button id="select-btn" class="btn-sm map-tool-btn map-select-btn" onclick="toggleSelectionMode()" title="Selection box (drag to select multiple tokens)">
         <img src="/static/tools/select.svg" alt="Select" width="16" height="16">
       </button>

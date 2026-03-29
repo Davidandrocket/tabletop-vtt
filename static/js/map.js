@@ -7,6 +7,7 @@ let selectedTokenId = null;          // primary selected token (single-click or 
 let selectedTokenIds = new Set();    // all currently selected tokens
 const tokenNodes = {}; // token_id -> Konva.Group
 const spellNodes = {}; // shape_id -> Konva shape
+const spellData  = {}; // shape_id -> shape data in grid units
 let mapImageNode = null;
 let mapHandleNode = null;
 let currentMapImage = { url: null, offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 };
@@ -24,9 +25,12 @@ let _groupDragStarts   = {};
 // Spell overlay state
 let spellActive = false;
 let spellDraftShape = null;
+let spellDraftLabel = null;
 let spellDraftStart = null;
 let spellShapeType = "circle";
 let spellShapeColor = "#e74c3c";
+let selectedSpellId = null;
+let spellHandleNode = null;
 
 function initMap(cols, rows) {
   currentCols = cols;
@@ -38,6 +42,9 @@ function initMap(cols, rows) {
     stage.destroy();
     Object.keys(tokenNodes).forEach(k => delete tokenNodes[k]);
     Object.keys(spellNodes).forEach(k => delete spellNodes[k]);
+    Object.keys(spellData).forEach(k => delete spellData[k]);
+    selectedSpellId = null;
+    spellHandleNode = null;
     selectedTokenId = null;
     mapImageNode = null;
   }
@@ -163,31 +170,38 @@ function initMap(cols, rows) {
     clearRuler();
   });
 
-  // Spell overlay: drag to draw AoE shapes (DM only — tool blocks token interaction)
+  // Spell overlay: drag to draw AoE shapes, click to select/move/resize
   stage.on("mousedown.spell touchstart.spell", (e) => {
     if (!spellActive) return;
+    if (e.target === spellHandleNode) return; // let handle's own drag handle it
     const targetId = getSpellTargetId(e.target);
     if (targetId) {
-      window.socketEmit("remove_spell_shape", { id: targetId });
+      // Select shape; if already selected, allow drag to proceed (do nothing)
+      if (selectedSpellId !== targetId) selectSpellShape(targetId);
       return;
     }
+    // Click on empty space: deselect and start drawing
+    deselectSpellShape();
     spellDraftStart = stage.getRelativePointerPosition();
   });
   stage.on("mousemove.spell touchmove.spell", () => {
     if (!spellActive || !spellDraftStart) return;
     const pos = stage.getRelativePointerPosition();
     spellDraftShape?.destroy();
+    spellDraftLabel?.destroy();
     spellDraftShape = buildSpellDraft(spellDraftStart, pos);
-    if (spellDraftShape) {
-      spellLayer.add(spellDraftShape);
-      spellLayer.batchDraw();
-    }
+    spellDraftLabel = buildDraftLabel(spellDraftStart, pos);
+    if (spellDraftShape) spellLayer.add(spellDraftShape);
+    if (spellDraftLabel) spellLayer.add(spellDraftLabel);
+    spellLayer.batchDraw();
   });
   stage.on("mouseup.spell touchend.spell", () => {
     if (!spellActive || !spellDraftStart) return;
     const pos = stage.getRelativePointerPosition();
     spellDraftShape?.destroy();
     spellDraftShape = null;
+    spellDraftLabel?.destroy();
+    spellDraftLabel = null;
     const shapeData = buildSpellShapeData(spellDraftStart, pos);
     if (shapeData) window.socketEmit("add_spell_shape", shapeData);
     spellDraftStart = null;
@@ -799,11 +813,7 @@ function conePoints(ox, oy, tx, ty) {
   if (len < 0.01) return [ox, oy, ox, oy, ox, oy];
   const halfBase = len * Math.tan(Math.PI / 6); // tan(30°)
   const ux = dx / len, uy = dy / len;
-  return [
-    ox, oy,
-    tx - uy * halfBase, ty + ux * halfBase,
-    tx + uy * halfBase, ty - ux * halfBase,
-  ];
+  return [ox, oy, tx - uy * halfBase, ty + ux * halfBase, tx + uy * halfBase, ty - ux * halfBase];
 }
 
 // Returns flat [x,y, ...] array of 4 points for a rectangle along a line (grid units)
@@ -830,7 +840,7 @@ function makeSpellKonvaShape(type, color, props, isDraft) {
     fill: hexToRgba(color, 0.25),
     stroke: color, strokeWidth: 2,
     dash: isDraft ? [8, 4] : [],
-    listening: true,
+    listening: true, draggable: false,
   };
   switch (type) {
     case "circle":
@@ -856,6 +866,28 @@ function buildSpellDraft(startPx, endPx) {
   return makeSpellKonvaShape(spellShapeType, spellShapeColor, { id: "__draft__", ...spellShapeProps(sx, sy, ex, ey) }, true);
 }
 
+function buildDraftLabel(startPx, endPx) {
+  const sx = startPx.x / GRID, sy = startPx.y / GRID;
+  const ex = endPx.x / GRID,   ey = endPx.y / GRID;
+  const dx = ex - sx, dy = ey - sy;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist < 0.1) return null;
+  let text;
+  switch (spellShapeType) {
+    case "circle": text = `r = ${Math.round(dist * 5)} ft`; break;
+    case "square": text = `${Math.round(Math.abs(dx) * 5)} × ${Math.round(Math.abs(dy) * 5)} ft`; break;
+    case "cone":   text = `${Math.round(dist * 5)} ft`; break;
+    case "line":   text = `${Math.round(dist * 5)} ft`; break;
+    default: return null;
+  }
+  return new Konva.Text({
+    x: endPx.x + 8, y: endPx.y - 22,
+    text, fontSize: 13, fontStyle: "bold",
+    fill: spellShapeColor, stroke: "#000", strokeWidth: 2, fillAfterStrokeEnabled: true,
+    listening: false,
+  });
+}
+
 function buildSpellShapeData(startPx, endPx) {
   const sx = startPx.x / GRID, sy = startPx.y / GRID;
   const ex = endPx.x / GRID,   ey = endPx.y / GRID;
@@ -873,28 +905,213 @@ function getSpellTargetId(target) {
   return null;
 }
 
+// World-pixel position of the resize handle for a given shape (uses stored data, not node offset)
+function getResizeHandlePos(data) {
+  switch (data.type) {
+    case "circle": return { x: (data.cx + data.radius) * GRID, y: data.cy * GRID };
+    case "square": return { x: (data.x + data.w) * GRID,       y: (data.y + data.h) * GRID };
+    case "cone":   return { x: data.tx * GRID,                  y: data.ty * GRID };
+    case "line":   return { x: data.x2 * GRID,                  y: data.y2 * GRID };
+    default:       return { x: 0, y: 0 };
+  }
+}
+
+// Adjust handle position to account for node's current drag offset
+function getHandlePosForNode(data, node) {
+  const base = getResizeHandlePos(data);
+  if (data.type === "circle" || data.type === "square") {
+    // For these, node.x/y IS the absolute position; compute offset from original
+    const origX = data.type === "circle" ? data.cx * GRID : data.x * GRID;
+    const origY = data.type === "circle" ? data.cy * GRID : data.y * GRID;
+    return { x: base.x + (node.x() - origX), y: base.y + (node.y() - origY) };
+  }
+  // cone/line: node.x/y is a drag offset from 0
+  return { x: base.x + node.x(), y: base.y + node.y() };
+}
+
+// Update a placed Konva node in-place from shape data (also resets any drag offset)
+function updateSpellKonvaNode(node, data) {
+  switch (data.type) {
+    case "circle":
+      node.x(data.cx * GRID); node.y(data.cy * GRID); node.radius(data.radius * GRID);
+      break;
+    case "square":
+      node.x(data.x * GRID); node.y(data.y * GRID);
+      node.width(data.w * GRID); node.height(data.h * GRID);
+      break;
+    case "cone":
+      node.x(0); node.y(0);
+      node.points(conePoints(data.ox, data.oy, data.tx, data.ty).map(v => v * GRID));
+      break;
+    case "line":
+      node.x(0); node.y(0);
+      node.points(linePoints(data.x1, data.y1, data.x2, data.y2, 0.5).map(v => v * GRID));
+      break;
+  }
+}
+
+function shiftShapeData(data, dx, dy) {
+  switch (data.type) {
+    case "circle": return { ...data, cx: data.cx + dx, cy: data.cy + dy };
+    case "square": return { ...data, x: data.x + dx, y: data.y + dy };
+    case "cone":   return { ...data, ox: data.ox+dx, oy: data.oy+dy, tx: data.tx+dx, ty: data.ty+dy };
+    case "line":   return { ...data, x1: data.x1+dx, y1: data.y1+dy, x2: data.x2+dx, y2: data.y2+dy };
+    default: return data;
+  }
+}
+
+function applyHandlePos(data, hx, hy) {
+  const hxG = hx / GRID, hyG = hy / GRID;
+  switch (data.type) {
+    case "circle": {
+      const r = Math.sqrt((hxG - data.cx) ** 2 + (hyG - data.cy) ** 2);
+      return r > 0.1 ? { ...data, radius: r } : null;
+    }
+    case "square": {
+      const w = hxG - data.x, h = hyG - data.y;
+      return (w > 0.1 && h > 0.1) ? { ...data, w, h } : null;
+    }
+    case "cone":  return { ...data, tx: hxG, ty: hyG };
+    case "line":  return { ...data, x2: hxG, y2: hyG };
+    default: return null;
+  }
+}
+
+function selectSpellShape(id) {
+  if (selectedSpellId === id) return;
+  deselectSpellShape();
+  const node = spellNodes[id];
+  if (!node) return;
+  selectedSpellId = id;
+
+  node.stroke("#fff");
+  node.strokeWidth(3);
+  node.draggable(true);
+
+  node.on("dragmove.spellmove", () => {
+    if (!spellHandleNode) return;
+    const hp = getHandlePosForNode(spellData[id], node);
+    spellHandleNode.x(hp.x);
+    spellHandleNode.y(hp.y);
+    spellLayer.batchDraw();
+  });
+  node.on("dragend.spellmove", () => onSpellShapeMoved(id));
+
+  showSpellHandle(id);
+  document.getElementById("spell-delete-btn")?.style.setProperty("display", "block");
+  spellLayer.batchDraw();
+}
+
+function deselectSpellShape() {
+  if (!selectedSpellId) return;
+  const node = spellNodes[selectedSpellId];
+  if (node) {
+    node.stroke(spellData[selectedSpellId]?.color ?? spellShapeColor);
+    node.strokeWidth(2);
+    node.draggable(false);
+    node.off("dragmove.spellmove");
+    node.off("dragend.spellmove");
+  }
+  spellHandleNode?.destroy();
+  spellHandleNode = null;
+  selectedSpellId = null;
+  document.getElementById("spell-delete-btn")?.style.setProperty("display", "none");
+  spellLayer.batchDraw();
+}
+
+function showSpellHandle(id) {
+  spellHandleNode?.destroy();
+  const data = spellData[id];
+  if (!data) return;
+  const hp = getResizeHandlePos(data);
+  spellHandleNode = new Konva.Circle({
+    x: hp.x, y: hp.y,
+    radius: 7, fill: "#fff", stroke: "#444", strokeWidth: 1.5,
+    draggable: true,
+  });
+  spellHandleNode.on("dragmove", () => {
+    const newData = applyHandlePos(spellData[id], spellHandleNode.x(), spellHandleNode.y());
+    if (newData) {
+      updateSpellKonvaNode(spellNodes[id], newData);
+      spellLayer.batchDraw();
+    }
+  });
+  spellHandleNode.on("dragend", () => {
+    const newData = applyHandlePos(spellData[id], spellHandleNode.x(), spellHandleNode.y());
+    if (newData) {
+      spellData[id] = newData;
+      window.socketEmit("update_spell_shape", newData);
+    }
+  });
+  spellLayer.add(spellHandleNode);
+}
+
+function onSpellShapeMoved(id) {
+  const node = spellNodes[id];
+  const data = spellData[id];
+  if (!node || !data) return;
+
+  let newData;
+  if (data.type === "circle") {
+    newData = { ...data, cx: node.x() / GRID, cy: node.y() / GRID };
+  } else if (data.type === "square") {
+    newData = { ...data, x: node.x() / GRID, y: node.y() / GRID };
+  } else {
+    // cone/line: node.x/y is drag offset
+    newData = shiftShapeData(data, node.x() / GRID, node.y() / GRID);
+  }
+
+  spellData[id] = newData;
+  updateSpellKonvaNode(node, newData);
+
+  if (spellHandleNode) {
+    const hp = getResizeHandlePos(newData);
+    spellHandleNode.x(hp.x);
+    spellHandleNode.y(hp.y);
+  }
+
+  spellLayer.batchDraw();
+  window.socketEmit("update_spell_shape", newData);
+}
+
+function deleteSelectedSpellShape() {
+  if (!selectedSpellId) return;
+  const id = selectedSpellId;
+  deselectSpellShape();
+  window.socketEmit("remove_spell_shape", { id });
+}
+window.deleteSelectedSpellShape = deleteSelectedSpellShape;
+
 function addSpellShapeToMap(shapeData) {
+  const wasSelected = selectedSpellId === shapeData.id;
+  if (wasSelected) deselectSpellShape();
   removeSpellShapeFromMap(shapeData.id);
+  spellData[shapeData.id] = { ...shapeData };
   const node = makeSpellKonvaShape(shapeData.type, shapeData.color, shapeData, false);
   if (node) {
     spellLayer.add(node);
     spellNodes[shapeData.id] = node;
+    if (wasSelected) selectSpellShape(shapeData.id);
     spellLayer.batchDraw();
   }
 }
 
 function removeSpellShapeFromMap(id) {
+  if (selectedSpellId === id) deselectSpellShape();
   const node = spellNodes[id];
   if (node) {
     node.destroy();
     delete spellNodes[id];
+    delete spellData[id];
     spellLayer.batchDraw();
   }
 }
 
 function clearSpellShapesFromMap() {
+  deselectSpellShape();
   spellLayer.destroyChildren();
   Object.keys(spellNodes).forEach(k => delete spellNodes[k]);
+  Object.keys(spellData).forEach(k => delete spellData[k]);
   spellLayer.batchDraw();
 }
 
@@ -926,8 +1143,11 @@ function toggleSpellMode() {
   const picker = document.getElementById("spell-picker");
   if (picker) picker.classList.toggle("hidden", !spellActive);
   if (!spellActive) {
+    deselectSpellShape();
     spellDraftShape?.destroy();
     spellDraftShape = null;
+    spellDraftLabel?.destroy();
+    spellDraftLabel = null;
     spellDraftStart = null;
     spellLayer.listening(false);
     spellLayer.batchDraw();
@@ -936,6 +1156,16 @@ function toggleSpellMode() {
     spellLayer.batchDraw();
   }
 }
+
+// Delete selected spell shape via keyboard
+document.addEventListener("keydown", (e) => {
+  if (!spellActive || !selectedSpellId) return;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (e.key === "Delete") {
+    e.preventDefault();
+    deleteSelectedSpellShape();
+  }
+});
 
 // --- Condition icons ---
 

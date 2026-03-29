@@ -593,6 +593,7 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 }
 .spell-shape-btn.active { background: var(--accent2); color: #000; }
 .spell-picker-colors { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+.spell-picker-actions { display: flex; gap: 4px; flex-wrap: wrap; }
 .spell-color-swatch {
   width: 20px; height: 20px;
   border-radius: 50%; cursor: pointer;

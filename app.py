@@ -741,6 +741,14 @@ def on_clear_map_image():
 
 # Dice roller
 
+@socketio.on("ping")
+def on_ping(data):
+    info = socket_info.get(request.sid)
+    if not info:
+        return
+    emit("ping", {"x": data.get("x", 0), "y": data.get("y", 0)}, room=info["code"])
+
+
 @socketio.on("roll_dice")
 def on_roll_dice(data):
     info = socket_info.get(request.sid)

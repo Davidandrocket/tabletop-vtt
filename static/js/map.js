@@ -2,7 +2,7 @@
 
 const GRID = 50; // px per cell
 
-let stage, imageLayer, gridLayer, tokenLayer, rulerLayer;
+let stage, imageLayer, gridLayer, tokenLayer, rulerLayer, pingLayer;
 let selectedTokenId = null;
 const tokenNodes = {}; // token_id -> Konva.Group
 let mapImageNode = null;
@@ -12,6 +12,7 @@ let currentCols = 20, currentRows = 15;
 let mapImageLoadGen = 0; // incremented on each load to discard stale callbacks
 let rulerActive = false;
 let rulerStart = null; // { col, row }
+let pingActive = false;
 
 function initMap(cols, rows) {
   currentCols = cols;
@@ -40,10 +41,12 @@ function initMap(cols, rows) {
   gridLayer = new Konva.Layer();
   tokenLayer = new Konva.Layer();
   rulerLayer = new Konva.Layer({ listening: false });
+  pingLayer  = new Konva.Layer({ listening: false });
   stage.add(imageLayer);
   stage.add(gridLayer);
   stage.add(tokenLayer);
   stage.add(rulerLayer);
+  stage.add(pingLayer);
 
   if (currentMapImage.url) {
     // setMapImage calls drawGrid internally (and skips background rect correctly)
@@ -77,6 +80,13 @@ function initMap(cols, rows) {
       y: pointer.y - mousePointTo.y * newScale,
     });
     stage.batchDraw();
+  });
+
+  // Ping: click emits a ping at the cursor cell
+  stage.on("click.ping", () => {
+    if (!pingActive) return;
+    const cell = stagePointerToCell();
+    window.socketEmit("ping", { x: cell.col, y: cell.row });
   });
 
   // Ruler: mousedown starts, mousemove updates, mouseup clears
@@ -518,6 +528,39 @@ function toggleRulerMode() {
   stage.draggable(!rulerActive);
   document.getElementById("ruler-btn").classList.toggle("active", rulerActive);
   if (!rulerActive) clearRuler();
+}
+
+function showPing(col, row) {
+  const x = (col + 0.5) * GRID;
+  const y = (row + 0.5) * GRID;
+
+  function ripple(delay) {
+    const circle = new Konva.Circle({
+      x, y, radius: 6,
+      stroke: "#4ECCA3", strokeWidth: 2.5, opacity: 1,
+    });
+    pingLayer.add(circle);
+    pingLayer.batchDraw();
+
+    setTimeout(() => {
+      new Konva.Tween({
+        node: circle,
+        duration: 1.2,
+        radius: GRID * 1.2,
+        opacity: 0,
+        easing: Konva.Easings.EaseOut,
+        onFinish: () => { circle.destroy(); pingLayer.batchDraw(); },
+      }).play();
+    }, delay);
+  }
+
+  ripple(0);
+  ripple(350);
+}
+
+function togglePingMode() {
+  pingActive = !pingActive;
+  document.getElementById("ping-btn").classList.toggle("active", pingActive);
 }
 
 // --- Condition icons ---

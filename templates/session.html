@@ -156,10 +156,15 @@
       {% endif %}
 
       <!-- Map tool buttons (always visible) -->
+      <button id="ping-btn" class="btn-sm map-tool-btn map-ping-btn" onclick="togglePingMode()" title="Ping (click map to mark a location)">
+        <img src="/static/tools/ping.svg" alt="Ping" width="16" height="16">
+      </button>
       <button id="ruler-btn" class="btn-sm map-tool-btn map-ruler-btn" onclick="toggleRulerMode()" title="Ruler (measure distance)">
         <img src="/static/tools/ruler.svg" alt="Ruler" width="16" height="16">
       </button>
-      <button class="btn-sm map-reset-btn" onclick="resetMapView()" title="Reset view (Home key)">⌖</button>
+      <button class="btn-sm map-tool-btn map-reset-btn" onclick="resetMapView()" title="Reset view (Home key)">
+        <img src="/static/tools/reset.svg" alt="Reset view" width="16" height="16">
+      </button>
 
       <!-- Selected token HP editor -->
       <div id="token-hp-editor" class="token-hp-editor hidden">

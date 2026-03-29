@@ -130,6 +130,10 @@ socket.on("token_removed", (data) => {
   if (selectedTokenId === data.id) onTokenSelected(null);
 });
 
+socket.on("ping", (data) => {
+  showPing(data.x, data.y);
+});
+
 socket.on("token_moved", (data) => {
   const token = sessionTokens[data.id];
   if (!token) return;

@@ -550,24 +550,34 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
   right: 16px;
   z-index: 10;
   opacity: 0.5;
-  padding: 4px 6px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   line-height: 0;
 }
 .map-tool-btn:hover { opacity: 1; }
 .map-tool-btn.active { opacity: 1; background: var(--accent2); border-color: var(--accent2); }
-.map-tool-btn img { filter: invert(1); display: block; }
+.map-tool-btn img { filter: invert(1); display: block; width: 24px; height: 24px; }
 .map-tool-btn.active img { filter: invert(0) brightness(0); }
 
-.map-ruler-btn { bottom: 96px; }
+.map-ruler-btn { bottom: 68px; }
 
 .map-reset-btn {
   position: absolute;
-  bottom: 56px;
+  bottom: 16px;
   right: 16px;
   z-index: 10;
   opacity: 0.5;
-  font-size: 1.1rem;
-  padding: 4px 8px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font-size: 1.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .map-reset-btn:hover { opacity: 1; }
 

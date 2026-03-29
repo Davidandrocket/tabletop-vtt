@@ -746,3 +746,25 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
   width: 100%;
   text-align: center;
 }
+
+/* ── Mobile ── */
+@media (max-width: 640px) {
+  /* HP editor: wrap to prevent overflow on narrow screens */
+  .token-hp-editor {
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: calc(100vw - 80px);
+  }
+  .token-hp-editor input { width: 52px; }
+  #hp-token-name { min-width: unset; }
+  #hp-display { min-width: unset; }
+
+  /* Topbar: hide session code to save space */
+  .topbar-left .session-code { display: none; }
+
+  /* Tool buttons: slightly larger tap targets */
+  .map-tool-btn { width: 44px; height: 44px; }
+  .map-ping-btn  { bottom: 130px; }
+  .map-ruler-btn { bottom: 74px; }
+  .map-reset-btn { bottom: 18px; }
+}

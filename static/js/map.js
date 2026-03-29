@@ -82,23 +82,23 @@ function initMap(cols, rows) {
     stage.batchDraw();
   });
 
-  // Ping: click emits a ping at the cursor cell
-  stage.on("click.ping", () => {
+  // Ping: click or tap emits a ping at the cursor cell
+  stage.on("click.ping tap.ping", () => {
     if (!pingActive) return;
     const cell = stagePointerToCell();
     window.socketEmit("ping", { x: cell.col, y: cell.row });
   });
 
-  // Ruler: mousedown starts, mousemove updates, mouseup clears
-  stage.on("mousedown.ruler", () => {
+  // Ruler: mouse + touch — start, update, clear
+  stage.on("mousedown.ruler touchstart.ruler", () => {
     if (!rulerActive) return;
     rulerStart = stagePointerToCell();
   });
-  stage.on("mousemove.ruler", () => {
+  stage.on("mousemove.ruler touchmove.ruler", () => {
     if (!rulerActive || !rulerStart) return;
     drawRuler(rulerStart, stagePointerToCell());
   });
-  stage.on("mouseup.ruler", () => {
+  stage.on("mouseup.ruler touchend.ruler", () => {
     if (!rulerActive) return;
     clearRuler();
   });
@@ -256,6 +256,33 @@ function addTokenToMap(token) {
     if (!canEdit) return;
     selectToken(token.id);
     window.openEditToken(token.id);
+  });
+
+  // Long-press to edit on mobile (500ms hold without moving)
+  let lpTimer = null;
+  let lpStartX = 0, lpStartY = 0;
+  group.on("touchstart", (e) => {
+    const isDMTouch = document.body.dataset.role === "dm";
+    const canEdit = isDMTouch || (window.MY_UUID && token.player_id === window.MY_UUID);
+    if (!canEdit) return;
+    const touch = e.evt.touches[0];
+    lpStartX = touch.clientX;
+    lpStartY = touch.clientY;
+    lpTimer = setTimeout(() => {
+      lpTimer = null;
+      selectToken(token.id);
+      window.openEditToken(token.id);
+    }, 500);
+  });
+  group.on("touchmove", (e) => {
+    if (!lpTimer) return;
+    const touch = e.evt.touches[0];
+    const dx = touch.clientX - lpStartX;
+    const dy = touch.clientY - lpStartY;
+    if (dx * dx + dy * dy > 100) { clearTimeout(lpTimer); lpTimer = null; }
+  });
+  group.on("touchend touchcancel", () => {
+    if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
   });
 
   group.on("dragend", () => {
@@ -523,9 +550,15 @@ function drawRuler(startCell, endCell) {
   rulerLayer.batchDraw();
 }
 
+function setToolActive(active) {
+  tokenLayer.listening(!active);
+  tokenLayer.batchDraw();
+}
+
 function toggleRulerMode() {
   rulerActive = !rulerActive;
   stage.draggable(!rulerActive);
+  setToolActive(rulerActive || pingActive);
   document.getElementById("ruler-btn").classList.toggle("active", rulerActive);
   if (!rulerActive) clearRuler();
 }
@@ -560,6 +593,7 @@ function showPing(col, row) {
 
 function togglePingMode() {
   pingActive = !pingActive;
+  setToolActive(rulerActive || pingActive);
   document.getElementById("ping-btn").classList.toggle("active", pingActive);
 }
 

@@ -1030,3 +1030,9 @@ function updatePlayerCount() {
   const count = Object.keys(onlinePlayers).length;
   document.getElementById("player-count").textContent = `${count} online`;
 }
+
+// Collapse both panels by default on small screens
+if (window.innerWidth <= 640) {
+  document.getElementById("char-panel")?.classList.add("collapsed");
+  document.getElementById("right-panel")?.classList.add("collapsed");
+}

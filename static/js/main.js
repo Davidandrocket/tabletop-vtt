@@ -53,6 +53,12 @@ window.MY_UUID = null;
 window.socketEmit = (event, data) => socket.emit(event, data);
 window.onTokenSelected = onTokenSelected;
 window.openEditToken = openEditToken;
+window.onMultipleSelected = () => {
+  document.getElementById("token-hp-editor")?.classList.add("hidden");
+  const removeBtn = document.getElementById("remove-token-btn");
+  if (removeBtn) removeBtn.disabled = ROLE !== "dm";
+};
+window.getToken = (id) => sessionTokens[id];
 
 socket.on("connect", () => {
   document.getElementById("connection-status").className = "status-dot connected";
@@ -163,7 +169,7 @@ socket.on("token_updated", (token) => {
   } else {
     updateTokenOnMap(token);
   }
-  if (selectedTokenId === token.id) refreshHpEditor(token);
+  if (getSelectedTokenId() === token.id) refreshHpEditor(token);
 });
 
 socket.on("hp_updated", (data) => {
@@ -808,8 +814,7 @@ function submitEditToken() {
 }
 
 function removeSelected() {
-  const tid = getSelectedTokenId();
-  if (tid) socket.emit("remove_token", { id: tid });
+  window.getSelectedTokenIds().forEach(id => socket.emit("remove_token", { id }));
 }
 
 function closeModal() {

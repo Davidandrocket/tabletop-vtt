@@ -2,8 +2,9 @@
 
 const GRID = 50; // px per cell
 
-let stage, imageLayer, gridLayer, tokenLayer, rulerLayer, pingLayer;
-let selectedTokenId = null;
+let stage, imageLayer, gridLayer, tokenLayer, selectionLayer, rulerLayer, pingLayer;
+let selectedTokenId = null;          // primary selected token (single-click or HP editor)
+let selectedTokenIds = new Set();    // all currently selected tokens
 const tokenNodes = {}; // token_id -> Konva.Group
 let mapImageNode = null;
 let mapHandleNode = null;
@@ -13,6 +14,12 @@ let mapImageLoadGen = 0; // incremented on each load to discard stale callbacks
 let rulerActive = false;
 let rulerStart = null; // { col, row }
 let pingActive = false;
+let selectionActive = false;
+let selectionRect = null;  // Konva.Rect being drawn
+let selectionStart = null; // { x, y } in stage coords
+// Group drag state
+let _groupDragAnchorId = null;
+let _groupDragStarts   = {};
 
 function initMap(cols, rows) {
   currentCols = cols;
@@ -40,11 +47,13 @@ function initMap(cols, rows) {
   imageLayer = new Konva.Layer();
   gridLayer = new Konva.Layer();
   tokenLayer = new Konva.Layer();
-  rulerLayer = new Konva.Layer({ listening: false });
-  pingLayer  = new Konva.Layer({ listening: false });
+  selectionLayer = new Konva.Layer({ listening: false });
+  rulerLayer     = new Konva.Layer({ listening: false });
+  pingLayer      = new Konva.Layer({ listening: false });
   stage.add(imageLayer);
   stage.add(gridLayer);
   stage.add(tokenLayer);
+  stage.add(selectionLayer);
   stage.add(rulerLayer);
   stage.add(pingLayer);
 
@@ -80,6 +89,47 @@ function initMap(cols, rows) {
       y: pointer.y - mousePointTo.y * newScale,
     });
     stage.batchDraw();
+  });
+
+  // Selection box: drag on empty space to box-select tokens
+  stage.on("mousedown.select touchstart.select", (e) => {
+    if (!selectionActive || isTokenTarget(e.target)) return;
+    selectionStart = stage.getRelativePointerPosition();
+    selectionRect = new Konva.Rect({
+      x: selectionStart.x, y: selectionStart.y, width: 0, height: 0,
+      stroke: "#4ECCA3", strokeWidth: 1.5, dash: [6, 3],
+      fill: "rgba(78,204,163,0.15)",
+    });
+    selectionLayer.add(selectionRect);
+  });
+  stage.on("mousemove.select touchmove.select", () => {
+    if (!selectionActive || !selectionRect) return;
+    const pos = stage.getRelativePointerPosition();
+    selectionRect.x(Math.min(pos.x, selectionStart.x));
+    selectionRect.y(Math.min(pos.y, selectionStart.y));
+    selectionRect.width(Math.abs(pos.x  - selectionStart.x));
+    selectionRect.height(Math.abs(pos.y - selectionStart.y));
+    selectionLayer.batchDraw();
+  });
+  stage.on("mouseup.select touchend.select", () => {
+    if (!selectionActive || !selectionRect) return;
+    const rx = selectionRect.x(), ry = selectionRect.y();
+    const rw = selectionRect.width(), rh = selectionRect.height();
+    selectionLayer.destroyChildren();
+    selectionRect = null;
+    selectionStart = null;
+    selectionLayer.batchDraw();
+    if (rw < 5 && rh < 5) return; // tiny drag = intentional click, skip
+    const isDM = document.body.dataset.role === "dm";
+    const found = [];
+    for (const [tid, grp] of Object.entries(tokenNodes)) {
+      const cx = grp.x(), cy = grp.y();
+      if (cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh) {
+        const tok = window.getToken(tid);
+        if (isDM || (window.MY_UUID && tok?.player_id === window.MY_UUID)) found.push(tid);
+      }
+    }
+    if (found.length > 0) selectMultiple(found);
   });
 
   // Ping: click or tap emits a ping at the cursor cell
@@ -285,13 +335,58 @@ function addTokenToMap(token) {
     if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
   });
 
-  group.on("dragend", () => {
-    const newX = Math.round(group.x() / GRID - size / 2);
-    const newY = Math.round(group.y() / GRID - size / 2);
-    group.x((newX + size / 2) * GRID);
-    group.y((newY + size / 2) * GRID);
+  group.on("dragstart", () => {
+    if (selectedTokenIds.has(token.id) && selectedTokenIds.size > 1) {
+      _groupDragAnchorId = token.id;
+      _groupDragStarts   = {};
+      selectedTokenIds.forEach(tid => {
+        if (tokenNodes[tid]) _groupDragStarts[tid] = { x: tokenNodes[tid].x(), y: tokenNodes[tid].y() };
+      });
+    }
+  });
+
+  group.on("dragmove", () => {
+    if (_groupDragAnchorId !== token.id || selectedTokenIds.size <= 1) return;
+    const dx = group.x() - _groupDragStarts[token.id].x;
+    const dy = group.y() - _groupDragStarts[token.id].y;
+    selectedTokenIds.forEach(tid => {
+      if (tid !== token.id && tokenNodes[tid] && _groupDragStarts[tid]) {
+        tokenNodes[tid].x(_groupDragStarts[tid].x + dx);
+        tokenNodes[tid].y(_groupDragStarts[tid].y + dy);
+      }
+    });
     tokenLayer.batchDraw();
-    window.socketEmit("move_token", { id: token.id, x: newX, y: newY });
+  });
+
+  group.on("dragend", () => {
+    if (_groupDragAnchorId === token.id && selectedTokenIds.size > 1) {
+      // Snap anchor, compute grid delta, apply to all selected
+      const anchorNewX = Math.round(group.x() / GRID - size / 2);
+      const anchorNewY = Math.round(group.y() / GRID - size / 2);
+      const anchorTok  = window.getToken(token.id);
+      const dx = anchorNewX - (anchorTok?.x ?? 0);
+      const dy = anchorNewY - (anchorTok?.y ?? 0);
+      selectedTokenIds.forEach(tid => {
+        const grp = tokenNodes[tid];
+        const tok  = window.getToken(tid);
+        if (!grp || !tok) return;
+        const sz = tok.size || 1;
+        const nx = tok.x + dx, ny = tok.y + dy;
+        grp.x((nx + sz / 2) * GRID);
+        grp.y((ny + sz / 2) * GRID);
+        window.socketEmit("move_token", { id: tid, x: nx, y: ny });
+      });
+      tokenLayer.batchDraw();
+      _groupDragAnchorId = null;
+    } else {
+      _groupDragAnchorId = null;
+      const newX = Math.round(group.x() / GRID - size / 2);
+      const newY = Math.round(group.y() / GRID - size / 2);
+      group.x((newX + size / 2) * GRID);
+      group.y((newY + size / 2) * GRID);
+      tokenLayer.batchDraw();
+      window.socketEmit("move_token", { id: token.id, x: newX, y: newY });
+    }
   });
 
   if (token.hidden) group.opacity(0.4);
@@ -346,6 +441,10 @@ function updateTokenOnMap(token) {
   tokenLayer.batchDraw();
 }
 
+function clearAllHighlights() {
+  tokenLayer.find(".body").forEach(n => n.strokeWidth(2));
+}
+
 function removeTokenFromMap(tokenId) {
   const group = tokenNodes[tokenId];
   if (group) {
@@ -353,35 +452,51 @@ function removeTokenFromMap(tokenId) {
     delete tokenNodes[tokenId];
     tokenLayer.batchDraw();
   }
-  if (selectedTokenId === tokenId) deselectToken();
+  if (selectedTokenIds.has(tokenId)) {
+    selectedTokenIds.delete(tokenId);
+    if (selectedTokenId === tokenId) {
+      selectedTokenId = null;
+      window.onTokenSelected(null);
+    }
+  }
 }
 
 function selectToken(tokenId) {
-  // Remove highlight from previously selected
-  if (selectedTokenId && tokenNodes[selectedTokenId]) {
-    const prev = tokenNodes[selectedTokenId].findOne(".body");
-    if (prev) prev.strokeWidth(2);
-  }
-
-  selectedTokenId = tokenId;
+  clearAllHighlights();
+  selectedTokenIds = new Set([tokenId]);
+  selectedTokenId  = tokenId;
   const group = tokenNodes[tokenId];
   if (group) {
-    const body = group.findOne(".body");
-    if (body) body.strokeWidth(4);
+    group.findOne(".body")?.strokeWidth(4);
     tokenLayer.batchDraw();
   }
-
   window.onTokenSelected(tokenId);
 }
 
+function selectMultiple(ids) {
+  clearAllHighlights();
+  selectedTokenIds = new Set(ids);
+  selectedTokenId  = null; // no HP editor for multi-select
+  ids.forEach(id => tokenNodes[id]?.findOne(".body")?.strokeWidth(4));
+  tokenLayer.batchDraw();
+  window.onMultipleSelected(ids.length);
+}
+
 function deselectToken() {
-  if (selectedTokenId && tokenNodes[selectedTokenId]) {
-    const body = tokenNodes[selectedTokenId].findOne(".body");
-    if (body) body.strokeWidth(2);
-    tokenLayer.batchDraw();
-  }
-  selectedTokenId = null;
+  clearAllHighlights();
+  selectedTokenIds = new Set();
+  selectedTokenId  = null;
+  tokenLayer.batchDraw();
   window.onTokenSelected(null);
+}
+
+function isTokenTarget(target) {
+  let node = target;
+  while (node && node !== stage) {
+    if (tokenNodes[node.id?.()]) return true;
+    node = node.parent;
+  }
+  return false;
 }
 
 function highlightCurrentTurn(tokenId) {
@@ -400,7 +515,9 @@ function hpColor(pct) {
   return "#e74c3c";
 }
 
-function getSelectedTokenId() { return selectedTokenId; }
+function getSelectedTokenId()  { return selectedTokenId; }
+function getSelectedTokenIds() { return [...selectedTokenIds]; }
+window.getSelectedTokenIds = getSelectedTokenIds;
 
 function setMapImage(url, offsetX, offsetY, scaleX = 1, scaleY = 1) {
   currentMapImage = { url, offsetX, offsetY, scaleX, scaleY };
@@ -559,9 +676,20 @@ function setToolActive(active) {
   tokenLayer.batchDraw();
 }
 
+function toggleSelectionMode() {
+  selectionActive = !selectionActive;
+  stage.draggable(!selectionActive && !rulerActive);
+  document.getElementById("select-btn").classList.toggle("active", selectionActive);
+  if (!selectionActive) {
+    selectionLayer.destroyChildren();
+    selectionLayer.batchDraw();
+    selectionRect = null;
+  }
+}
+
 function toggleRulerMode() {
   rulerActive = !rulerActive;
-  stage.draggable(!rulerActive);
+  stage.draggable(!rulerActive && !selectionActive);
   setToolActive(rulerActive || pingActive);
   document.getElementById("ruler-btn").classList.toggle("active", rulerActive);
   if (!rulerActive) clearRuler();

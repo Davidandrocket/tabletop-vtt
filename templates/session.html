@@ -156,6 +156,9 @@
       {% endif %}
 
       <!-- Map tool buttons (always visible) -->
+      <button id="select-btn" class="btn-sm map-tool-btn map-select-btn" onclick="toggleSelectionMode()" title="Selection box (drag to select multiple tokens)">
+        <img src="/static/tools/select.svg" alt="Select" width="16" height="16">
+      </button>
       <button id="ping-btn" class="btn-sm map-tool-btn map-ping-btn" onclick="togglePingMode()" title="Ping (click map to mark a location)">
         <img src="/static/tools/ping.svg" alt="Ping" width="16" height="16">
       </button>

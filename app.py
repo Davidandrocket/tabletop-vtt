@@ -239,6 +239,7 @@ def db_load_session(code):
             "scale_y": row["map_image_scale_y"] if row["map_image_scale_y"] is not None else 1,
         },
         "chat": [json.loads(r["data"]) for r in reversed(chat_rows)],
+        "spell_shapes": {},
     }
     return True
 
@@ -336,6 +337,7 @@ def create_session():
         "current_turn": -1,
         "map": {"cols": 20, "rows": 15, "grid_size": 50, "image_url": None, "offset_x": 0, "offset_y": 0, "scale_x": 1, "scale_y": 1},
         "chat": [],
+        "spell_shapes": {},
     }
     db_save_session(code)
 
@@ -448,6 +450,7 @@ def on_connect():
         "my_sid": request.sid,
         "my_uuid": player_uuid,
         "party_characters": party_chars,
+        "spell_shapes": list(sess.get("spell_shapes", {}).values()),
     })
     emit("player_joined", {"name": name, "role": role, "sid": request.sid, "uuid": player_uuid},
          room=code, include_self=False)
@@ -758,6 +761,53 @@ def on_ping(data):
     if not info:
         return
     emit("ping", {"x": data.get("x", 0), "y": data.get("y", 0)}, room=info["code"])
+
+
+# Spell shape overlays (DM only; broadcast to all clients in room)
+
+@socketio.on("add_spell_shape")
+def on_add_spell_shape(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    if "spell_shapes" not in sess:
+        sess["spell_shapes"] = {}
+    shape_id = data.get("id") or str(uuid.uuid4())[:8]
+    shape = {**data, "id": shape_id}
+    sess["spell_shapes"][shape_id] = shape
+    emit("spell_shape_added", shape, room=code)
+
+
+@socketio.on("remove_spell_shape")
+def on_remove_spell_shape(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    shape_id = data.get("id")
+    if shape_id:
+        sess.get("spell_shapes", {}).pop(shape_id, None)
+    emit("spell_shape_removed", {"id": shape_id}, room=code)
+
+
+@socketio.on("clear_spell_shapes")
+def on_clear_spell_shapes(data=None):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    sess["spell_shapes"] = {}
+    emit("spell_shapes_cleared", {}, room=code)
 
 
 @socketio.on("roll_dice")

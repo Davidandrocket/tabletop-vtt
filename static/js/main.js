@@ -98,6 +98,12 @@ socket.on("session_state", (data) => {
     addTokenToMap(token);
   }
 
+  // Load spell shape overlays
+  window.clearSpellShapesFromMap?.();
+  for (const shape of (data.spell_shapes || [])) {
+    window.addSpellShapeToMap?.(shape);
+  }
+
   // Chat history
   for (const msg of data.chat) {
     appendChat(msg, false);
@@ -139,6 +145,10 @@ socket.on("token_removed", (data) => {
 socket.on("ping", (data) => {
   showPing(data.x, data.y);
 });
+
+socket.on("spell_shape_added",   (data) => { window.addSpellShapeToMap?.(data); });
+socket.on("spell_shape_removed",  (data) => { window.removeSpellShapeFromMap?.(data.id); });
+socket.on("spell_shapes_cleared", ()     => { window.clearSpellShapesFromMap?.(); });
 
 socket.on("token_moved", (data) => {
   const token = sessionTokens[data.id];

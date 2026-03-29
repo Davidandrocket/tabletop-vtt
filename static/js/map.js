@@ -2,10 +2,11 @@
 
 const GRID = 50; // px per cell
 
-let stage, imageLayer, gridLayer, tokenLayer, selectionLayer, rulerLayer, pingLayer;
+let stage, imageLayer, gridLayer, tokenLayer, selectionLayer, rulerLayer, pingLayer, spellLayer;
 let selectedTokenId = null;          // primary selected token (single-click or HP editor)
 let selectedTokenIds = new Set();    // all currently selected tokens
 const tokenNodes = {}; // token_id -> Konva.Group
+const spellNodes = {}; // shape_id -> Konva shape
 let mapImageNode = null;
 let mapHandleNode = null;
 let currentMapImage = { url: null, offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 };
@@ -20,6 +21,12 @@ let selectionStart = null; // { x, y } in stage coords
 // Group drag state
 let _groupDragAnchorId = null;
 let _groupDragStarts   = {};
+// Spell overlay state
+let spellActive = false;
+let spellDraftShape = null;
+let spellDraftStart = null;
+let spellShapeType = "circle";
+let spellShapeColor = "#e74c3c";
 
 function initMap(cols, rows) {
   currentCols = cols;
@@ -30,6 +37,7 @@ function initMap(cols, rows) {
   if (stage) {
     stage.destroy();
     Object.keys(tokenNodes).forEach(k => delete tokenNodes[k]);
+    Object.keys(spellNodes).forEach(k => delete spellNodes[k]);
     selectedTokenId = null;
     mapImageNode = null;
   }
@@ -46,12 +54,14 @@ function initMap(cols, rows) {
 
   imageLayer = new Konva.Layer();
   gridLayer = new Konva.Layer();
+  spellLayer = new Konva.Layer({ listening: false });
   tokenLayer = new Konva.Layer();
   selectionLayer = new Konva.Layer({ listening: false });
   rulerLayer     = new Konva.Layer({ listening: false });
   pingLayer      = new Konva.Layer({ listening: false });
   stage.add(imageLayer);
   stage.add(gridLayer);
+  stage.add(spellLayer);
   stage.add(tokenLayer);
   stage.add(selectionLayer);
   stage.add(rulerLayer);
@@ -151,6 +161,37 @@ function initMap(cols, rows) {
   stage.on("mouseup.ruler touchend.ruler", () => {
     if (!rulerActive) return;
     clearRuler();
+  });
+
+  // Spell overlay: drag to draw AoE shapes (DM only — tool blocks token interaction)
+  stage.on("mousedown.spell touchstart.spell", (e) => {
+    if (!spellActive) return;
+    const targetId = getSpellTargetId(e.target);
+    if (targetId) {
+      window.socketEmit("remove_spell_shape", { id: targetId });
+      return;
+    }
+    spellDraftStart = stage.getRelativePointerPosition();
+  });
+  stage.on("mousemove.spell touchmove.spell", () => {
+    if (!spellActive || !spellDraftStart) return;
+    const pos = stage.getRelativePointerPosition();
+    spellDraftShape?.destroy();
+    spellDraftShape = buildSpellDraft(spellDraftStart, pos);
+    if (spellDraftShape) {
+      spellLayer.add(spellDraftShape);
+      spellLayer.batchDraw();
+    }
+  });
+  stage.on("mouseup.spell touchend.spell", () => {
+    if (!spellActive || !spellDraftStart) return;
+    const pos = stage.getRelativePointerPosition();
+    spellDraftShape?.destroy();
+    spellDraftShape = null;
+    const shapeData = buildSpellShapeData(spellDraftStart, pos);
+    if (shapeData) window.socketEmit("add_spell_shape", shapeData);
+    spellDraftStart = null;
+    spellLayer.batchDraw();
   });
 
   // Handle resize
@@ -691,7 +732,7 @@ function setToolActive(active) {
 
 function toggleSelectionMode() {
   selectionActive = !selectionActive;
-  stage.draggable(!selectionActive && !rulerActive);
+  stage.draggable(!selectionActive && !rulerActive && !spellActive);
   document.getElementById("select-btn").classList.toggle("active", selectionActive);
   if (!selectionActive) {
     selectionLayer.destroyChildren();
@@ -702,8 +743,8 @@ function toggleSelectionMode() {
 
 function toggleRulerMode() {
   rulerActive = !rulerActive;
-  stage.draggable(!rulerActive && !selectionActive);
-  setToolActive(rulerActive || pingActive);
+  stage.draggable(!rulerActive && !selectionActive && !spellActive);
+  setToolActive(rulerActive || pingActive || spellActive);
   document.getElementById("ruler-btn").classList.toggle("active", rulerActive);
   if (!rulerActive) clearRuler();
 }
@@ -738,8 +779,162 @@ function showPing(col, row) {
 
 function togglePingMode() {
   pingActive = !pingActive;
-  setToolActive(rulerActive || pingActive);
+  setToolActive(rulerActive || pingActive || spellActive);
   document.getElementById("ping-btn").classList.toggle("active", pingActive);
+}
+
+// --- Spell overlay tool ---
+
+function hexToRgba(hex, a) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// Returns flat [x,y, ...] array of 3 points for a 60° cone (grid units)
+function conePoints(ox, oy, tx, ty) {
+  const dx = tx - ox, dy = ty - oy;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 0.01) return [ox, oy, ox, oy, ox, oy];
+  const halfBase = len * Math.tan(Math.PI / 6); // tan(30°)
+  const ux = dx / len, uy = dy / len;
+  return [
+    ox, oy,
+    tx - uy * halfBase, ty + ux * halfBase,
+    tx + uy * halfBase, ty - ux * halfBase,
+  ];
+}
+
+// Returns flat [x,y, ...] array of 4 points for a rectangle along a line (grid units)
+function linePoints(x1, y1, x2, y2, halfW) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 0.01) return [x1, y1, x1, y1, x1, y1, x1, y1];
+  const nx = -dy / len * halfW, ny = dx / len * halfW;
+  return [x1 + nx, y1 + ny, x2 + nx, y2 + ny, x2 - nx, y2 - ny, x1 - nx, y1 - ny];
+}
+
+function spellShapeProps(sx, sy, ex, ey) {
+  switch (spellShapeType) {
+    case "circle": return { cx: sx, cy: sy, radius: Math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2) };
+    case "square": return { x: Math.min(sx, ex), y: Math.min(sy, ey), w: Math.abs(ex - sx), h: Math.abs(ey - sy) };
+    case "cone":   return { ox: sx, oy: sy, tx: ex, ty: ey };
+    case "line":   return { x1: sx, y1: sy, x2: ex, y2: ey };
+    default: return {};
+  }
+}
+
+function makeSpellKonvaShape(type, color, props, isDraft) {
+  const style = {
+    fill: hexToRgba(color, 0.25),
+    stroke: color, strokeWidth: 2,
+    dash: isDraft ? [8, 4] : [],
+    listening: true,
+  };
+  switch (type) {
+    case "circle":
+      return new Konva.Circle({ id: props.id, x: props.cx * GRID, y: props.cy * GRID, radius: props.radius * GRID, ...style });
+    case "square":
+      return new Konva.Rect({ id: props.id, x: props.x * GRID, y: props.y * GRID, width: props.w * GRID, height: props.h * GRID, ...style });
+    case "cone": {
+      const pts = conePoints(props.ox, props.oy, props.tx, props.ty).map(v => v * GRID);
+      return new Konva.Line({ id: props.id, points: pts, closed: true, ...style });
+    }
+    case "line": {
+      const pts = linePoints(props.x1, props.y1, props.x2, props.y2, 0.5).map(v => v * GRID);
+      return new Konva.Line({ id: props.id, points: pts, closed: true, ...style });
+    }
+    default: return null;
+  }
+}
+
+function buildSpellDraft(startPx, endPx) {
+  const sx = startPx.x / GRID, sy = startPx.y / GRID;
+  const ex = endPx.x / GRID,   ey = endPx.y / GRID;
+  if (Math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2) < 0.1) return null;
+  return makeSpellKonvaShape(spellShapeType, spellShapeColor, { id: "__draft__", ...spellShapeProps(sx, sy, ex, ey) }, true);
+}
+
+function buildSpellShapeData(startPx, endPx) {
+  const sx = startPx.x / GRID, sy = startPx.y / GRID;
+  const ex = endPx.x / GRID,   ey = endPx.y / GRID;
+  if (Math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2) < 0.2) return null;
+  return { id: crypto.randomUUID(), type: spellShapeType, color: spellShapeColor, ...spellShapeProps(sx, sy, ex, ey) };
+}
+
+function getSpellTargetId(target) {
+  let node = target;
+  while (node && node !== stage) {
+    const id = node.id?.();
+    if (id && spellNodes[id] !== undefined) return id;
+    node = node.parent;
+  }
+  return null;
+}
+
+function addSpellShapeToMap(shapeData) {
+  removeSpellShapeFromMap(shapeData.id);
+  const node = makeSpellKonvaShape(shapeData.type, shapeData.color, shapeData, false);
+  if (node) {
+    spellLayer.add(node);
+    spellNodes[shapeData.id] = node;
+    spellLayer.batchDraw();
+  }
+}
+
+function removeSpellShapeFromMap(id) {
+  const node = spellNodes[id];
+  if (node) {
+    node.destroy();
+    delete spellNodes[id];
+    spellLayer.batchDraw();
+  }
+}
+
+function clearSpellShapesFromMap() {
+  spellLayer.destroyChildren();
+  Object.keys(spellNodes).forEach(k => delete spellNodes[k]);
+  spellLayer.batchDraw();
+}
+
+window.addSpellShapeToMap     = addSpellShapeToMap;
+window.removeSpellShapeFromMap = removeSpellShapeFromMap;
+window.clearSpellShapesFromMap = clearSpellShapesFromMap;
+
+window.setSpellShapeType = (type) => {
+  spellShapeType = type;
+  document.querySelectorAll(".spell-shape-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.shape === type);
+  });
+};
+
+window.setSpellShapeColor = (color) => {
+  spellShapeColor = color;
+  document.querySelectorAll(".spell-color-swatch").forEach(s => {
+    s.classList.toggle("active", s.dataset.color === color);
+  });
+  const input = document.getElementById("spell-color-input");
+  if (input) input.value = color;
+};
+
+function toggleSpellMode() {
+  spellActive = !spellActive;
+  setToolActive(rulerActive || pingActive || spellActive);
+  stage.draggable(!spellActive && !rulerActive && !selectionActive);
+  document.getElementById("spell-btn").classList.toggle("active", spellActive);
+  const picker = document.getElementById("spell-picker");
+  if (picker) picker.classList.toggle("hidden", !spellActive);
+  if (!spellActive) {
+    spellDraftShape?.destroy();
+    spellDraftShape = null;
+    spellDraftStart = null;
+    spellLayer.listening(false);
+    spellLayer.batchDraw();
+  } else {
+    spellLayer.listening(true);
+    spellLayer.batchDraw();
+  }
 }
 
 // --- Condition icons ---

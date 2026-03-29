@@ -156,6 +156,29 @@
       {% endif %}
 
       <!-- Map tool buttons (always visible) -->
+      {% if role == 'dm' %}
+      <button id="spell-btn" class="btn-sm map-tool-btn map-spell-btn" onclick="toggleSpellMode()" title="Spell overlay (drag to draw AoE shapes; click a shape to remove it)">
+        <img src="/static/tools/spell.svg" alt="Spell" width="16" height="16">
+      </button>
+      <div id="spell-picker" class="spell-picker hidden">
+        <div class="spell-picker-shapes">
+          <button class="btn-sm spell-shape-btn active" data-shape="circle" onclick="window.setSpellShapeType('circle')" title="Circle">○</button>
+          <button class="btn-sm spell-shape-btn" data-shape="square" onclick="window.setSpellShapeType('square')" title="Square">□</button>
+          <button class="btn-sm spell-shape-btn" data-shape="cone" onclick="window.setSpellShapeType('cone')" title="Cone (60°)">△</button>
+          <button class="btn-sm spell-shape-btn" data-shape="line" onclick="window.setSpellShapeType('line')" title="Line (5ft wide)">⟵</button>
+        </div>
+        <div class="spell-picker-colors">
+          <div class="spell-color-swatch active" data-color="#e74c3c" style="background:#e74c3c" onclick="window.setSpellShapeColor('#e74c3c')" title="Red"></div>
+          <div class="spell-color-swatch" data-color="#e67e22" style="background:#e67e22" onclick="window.setSpellShapeColor('#e67e22')" title="Orange"></div>
+          <div class="spell-color-swatch" data-color="#f1c40f" style="background:#f1c40f" onclick="window.setSpellShapeColor('#f1c40f')" title="Yellow"></div>
+          <div class="spell-color-swatch" data-color="#2ecc71" style="background:#2ecc71" onclick="window.setSpellShapeColor('#2ecc71')" title="Green"></div>
+          <div class="spell-color-swatch" data-color="#3498db" style="background:#3498db" onclick="window.setSpellShapeColor('#3498db')" title="Blue"></div>
+          <div class="spell-color-swatch" data-color="#9b59b6" style="background:#9b59b6" onclick="window.setSpellShapeColor('#9b59b6')" title="Purple"></div>
+          <input type="color" id="spell-color-input" value="#e74c3c" oninput="window.setSpellShapeColor(this.value)" title="Custom color">
+        </div>
+        <button class="btn-sm btn-danger" style="font-size:0.75rem;padding:3px 8px" onclick="window.socketEmit('clear_spell_shapes', {})" title="Remove all overlays">Clear All</button>
+      </div>
+      {% endif %}
       <button id="select-btn" class="btn-sm map-tool-btn map-select-btn" onclick="toggleSelectionMode()" title="Selection box (drag to select multiple tokens)">
         <img src="/static/tools/select.svg" alt="Select" width="16" height="16">
       </button>

@@ -2,7 +2,7 @@
 
 const GRID = 50; // px per cell
 
-let stage, imageLayer, gridLayer, tokenLayer;
+let stage, imageLayer, gridLayer, tokenLayer, rulerLayer;
 let selectedTokenId = null;
 const tokenNodes = {}; // token_id -> Konva.Group
 let mapImageNode = null;
@@ -10,6 +10,8 @@ let mapHandleNode = null;
 let currentMapImage = { url: null, offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 };
 let currentCols = 20, currentRows = 15;
 let mapImageLoadGen = 0; // incremented on each load to discard stale callbacks
+let rulerActive = false;
+let rulerStart = null; // { col, row }
 
 function initMap(cols, rows) {
   currentCols = cols;
@@ -37,9 +39,11 @@ function initMap(cols, rows) {
   imageLayer = new Konva.Layer();
   gridLayer = new Konva.Layer();
   tokenLayer = new Konva.Layer();
+  rulerLayer = new Konva.Layer({ listening: false });
   stage.add(imageLayer);
   stage.add(gridLayer);
   stage.add(tokenLayer);
+  stage.add(rulerLayer);
 
   if (currentMapImage.url) {
     // setMapImage calls drawGrid internally (and skips background rect correctly)
@@ -73,6 +77,20 @@ function initMap(cols, rows) {
       y: pointer.y - mousePointTo.y * newScale,
     });
     stage.batchDraw();
+  });
+
+  // Ruler: mousedown starts, mousemove updates, mouseup clears
+  stage.on("mousedown.ruler", () => {
+    if (!rulerActive) return;
+    rulerStart = stagePointerToCell();
+  });
+  stage.on("mousemove.ruler", () => {
+    if (!rulerActive || !rulerStart) return;
+    drawRuler(rulerStart, stagePointerToCell());
+  });
+  stage.on("mouseup.ruler", () => {
+    if (!rulerActive) return;
+    clearRuler();
   });
 
   // Handle resize
@@ -448,6 +466,58 @@ function setMapOffset(offsetX, offsetY, scaleX, scaleY) {
     updateHandlePosition();
     imageLayer.batchDraw();
   }
+}
+
+// --- Ruler tool ---
+
+function stagePointerToCell() {
+  const pos = stage.getRelativePointerPosition();
+  return { col: Math.floor(pos.x / GRID), row: Math.floor(pos.y / GRID) };
+}
+
+function clearRuler() {
+  rulerLayer.destroyChildren();
+  rulerLayer.batchDraw();
+  rulerStart = null;
+}
+
+function drawRuler(startCell, endCell) {
+  rulerLayer.destroyChildren();
+
+  const from = { x: (startCell.col + 0.5) * GRID, y: (startCell.row + 0.5) * GRID };
+  const to   = { x: (endCell.col   + 0.5) * GRID, y: (endCell.row   + 0.5) * GRID };
+  const dx = endCell.col - startCell.col;
+  const dy = endCell.row - startCell.row;
+
+  rulerLayer.add(new Konva.Line({
+    points: [from.x, from.y, to.x, to.y],
+    stroke: "#f0a500", strokeWidth: 2, dash: [8, 4],
+  }));
+  rulerLayer.add(new Konva.Circle({ x: from.x, y: from.y, radius: 5, fill: "#f0a500" }));
+  rulerLayer.add(new Konva.Circle({ x: to.x,   y: to.y,   radius: 5, fill: "#f0a500" }));
+
+  if (dx !== 0 || dy !== 0) {
+    const dist = Math.round(Math.sqrt(dx * dx + dy * dy) * 5);
+    const label = new Konva.Text({
+      x: (from.x + to.x) / 2,
+      y: (from.y + to.y) / 2,
+      text: `${dist} ft`,
+      fontSize: 14, fontStyle: "bold",
+      fill: "#f0a500", stroke: "#000", strokeWidth: 2, fillAfterStrokeEnabled: true,
+    });
+    label.offsetX(label.width() / 2);
+    label.offsetY(label.height() / 2);
+    rulerLayer.add(label);
+  }
+
+  rulerLayer.batchDraw();
+}
+
+function toggleRulerMode() {
+  rulerActive = !rulerActive;
+  stage.draggable(!rulerActive);
+  document.getElementById("ruler-btn").classList.toggle("active", rulerActive);
+  if (!rulerActive) clearRuler();
 }
 
 // --- Condition icons ---

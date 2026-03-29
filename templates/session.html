@@ -155,7 +155,10 @@
       </div>
       {% endif %}
 
-      <!-- Reset view button (always visible) -->
+      <!-- Map tool buttons (always visible) -->
+      <button id="ruler-btn" class="btn-sm map-tool-btn map-ruler-btn" onclick="toggleRulerMode()" title="Ruler (measure distance)">
+        <img src="/static/tools/ruler.svg" alt="Ruler" width="16" height="16">
+      </button>
       <button class="btn-sm map-reset-btn" onclick="resetMapView()" title="Reset view (Home key)">⌖</button>
 
       <!-- Selected token HP editor -->

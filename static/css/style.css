@@ -544,7 +544,22 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 .chat-input-row { display: flex; gap: 6px; }
 .chat-input-row input { flex: 1; margin: 0; }
 
-/* ── Map reset button ── */
+/* ── Map tool buttons ── */
+.map-tool-btn {
+  position: absolute;
+  right: 16px;
+  z-index: 10;
+  opacity: 0.5;
+  padding: 4px 6px;
+  line-height: 0;
+}
+.map-tool-btn:hover { opacity: 1; }
+.map-tool-btn.active { opacity: 1; background: var(--accent2); border-color: var(--accent2); }
+.map-tool-btn img { filter: invert(1); display: block; }
+.map-tool-btn.active img { filter: invert(0) brightness(0); }
+
+.map-ruler-btn { bottom: 96px; }
+
 .map-reset-btn {
   position: absolute;
   bottom: 56px;

@@ -7,6 +7,7 @@ import uuid
 import random
 import string
 import re
+import shutil
 import sqlite3
 import requests
 from flask import Flask, render_template, request, session, redirect, url_for
@@ -88,11 +89,27 @@ def init_db():
             ("map_offset_y",     "REAL DEFAULT 0"),
             ("map_image_scale",  "REAL DEFAULT 1"),   # used as scale_x
             ("map_image_scale_y","REAL DEFAULT 1"),
+            ("active_profile_id","INTEGER"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
             except sqlite3.OperationalError:
                 pass  # already exists
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS map_profiles (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_code TEXT NOT NULL,
+                name         TEXT NOT NULL,
+                image_url    TEXT,
+                offset_x     REAL DEFAULT 0,
+                offset_y     REAL DEFAULT 0,
+                scale_x      REAL DEFAULT 1,
+                scale_y      REAL DEFAULT 1,
+                cols         INTEGER DEFAULT 20,
+                rows         INTEGER DEFAULT 15
+            )
+        """)
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS player_characters (
@@ -137,8 +154,9 @@ def db_save_session(code):
         conn.execute("""
             INSERT OR REPLACE INTO sessions
                 (code, dm_name, map_cols, map_rows, initiative_order, current_turn,
-                 map_image_url, map_offset_x, map_offset_y, map_image_scale, map_image_scale_y)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 map_image_url, map_offset_x, map_offset_y, map_image_scale, map_image_scale_y,
+                 active_profile_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             code,
             sess["dm_name"],
@@ -151,6 +169,7 @@ def db_save_session(code):
             sess["map"].get("offset_y", 0),
             sess["map"].get("scale_x", 1),
             sess["map"].get("scale_y", 1),
+            sess.get("active_profile_id"),
         ))
 
 
@@ -240,8 +259,18 @@ def db_load_session(code):
         },
         "chat": [json.loads(r["data"]) for r in reversed(chat_rows)],
         "spell_shapes": {},
+        "active_profile_id": row["active_profile_id"],
     }
     return True
+
+
+def db_load_profiles(code):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM map_profiles WHERE session_code = ? ORDER BY id",
+            (code,)
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def db_save_character(code, player_uuid, character_id, parsed):
@@ -338,6 +367,7 @@ def create_session():
         "map": {"cols": 20, "rows": 15, "grid_size": 50, "image_url": None, "offset_x": 0, "offset_y": 0, "scale_x": 1, "scale_y": 1},
         "chat": [],
         "spell_shapes": {},
+        "active_profile_id": None,
     }
     db_save_session(code)
 
@@ -451,6 +481,8 @@ def on_connect():
         "my_uuid": player_uuid,
         "party_characters": party_chars,
         "spell_shapes": list(sess.get("spell_shapes", {}).values()),
+        "map_profiles": db_load_profiles(code),
+        "active_profile_id": sess.get("active_profile_id"),
     })
     emit("player_joined", {"name": name, "role": role, "sid": request.sid, "uuid": player_uuid},
          room=code, include_self=False)
@@ -823,6 +855,162 @@ def on_clear_spell_shapes(data=None):
         return
     sess["spell_shapes"] = {}
     emit("spell_shapes_cleared", {}, room=code)
+
+
+# Map profiles (DM only)
+
+@socketio.on("save_map_profile")
+def on_save_map_profile(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    name = str(data.get("name", "Profile")).strip()[:50] or "Profile"
+    current_map = sess["map"]
+    image_url = current_map.get("image_url")
+
+    # Copy image to a stable, profile-owned file so future uploads don't overwrite it
+    if image_url:
+        filename = image_url.rsplit("/", 1)[-1]
+        src = os.path.join(UPLOAD_FOLDER, filename)
+        if os.path.exists(src):
+            ext = filename.rsplit(".", 1)[-1] if "." in filename else "png"
+            profile_filename = f"{code}_profile_{uuid.uuid4().hex[:8]}.{ext}"
+            dst = os.path.join(UPLOAD_FOLDER, profile_filename)
+            shutil.copy2(src, dst)
+            image_url = f"/static/uploads/{profile_filename}"
+
+    with get_db() as conn:
+        cursor = conn.execute("""
+            INSERT INTO map_profiles
+                (session_code, name, image_url, offset_x, offset_y, scale_x, scale_y, cols, rows)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            code, name, image_url,
+            current_map.get("offset_x", 0), current_map.get("offset_y", 0),
+            current_map.get("scale_x", 1), current_map.get("scale_y", 1),
+            current_map.get("cols", 20), current_map.get("rows", 15),
+        ))
+        profile_id = cursor.lastrowid
+
+    sess["active_profile_id"] = profile_id
+    db_save_session(code)
+    emit("map_profiles_updated", {
+        "profiles": db_load_profiles(code),
+        "active_profile_id": profile_id,
+    }, room=code)
+
+
+@socketio.on("load_map_profile")
+def on_load_map_profile(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    profile_id = data.get("id")
+    if profile_id is None:
+        return
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM map_profiles WHERE id = ? AND session_code = ?",
+            (int(profile_id), code)
+        ).fetchone()
+    if not row:
+        return
+
+    sess["map"]["image_url"] = row["image_url"]
+    sess["map"]["offset_x"]  = row["offset_x"]
+    sess["map"]["offset_y"]  = row["offset_y"]
+    sess["map"]["scale_x"]   = row["scale_x"]
+    sess["map"]["scale_y"]   = row["scale_y"]
+    sess["map"]["cols"]      = row["cols"]
+    sess["map"]["rows"]      = row["rows"]
+    sess["active_profile_id"] = row["id"]
+    sess["spell_shapes"] = {}
+
+    db_save_session(code)
+    emit("map_resized", {"cols": row["cols"], "rows": row["rows"]}, room=code)
+    emit("map_image_updated", {
+        "url": row["image_url"],
+        "offset_x": row["offset_x"],
+        "offset_y": row["offset_y"],
+        "scale_x": row["scale_x"],
+        "scale_y": row["scale_y"],
+    }, room=code)
+    emit("spell_shapes_cleared", {}, room=code)
+    emit("map_profiles_updated", {
+        "profiles": db_load_profiles(code),
+        "active_profile_id": row["id"],
+    }, room=code)
+
+
+@socketio.on("delete_map_profile")
+def on_delete_map_profile(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    profile_id = data.get("id")
+    if profile_id is None:
+        return
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT image_url FROM map_profiles WHERE id = ? AND session_code = ?",
+            (int(profile_id), code)
+        ).fetchone()
+        if not row:
+            return
+        conn.execute("DELETE FROM map_profiles WHERE id = ?", (int(profile_id),))
+
+    # Clean up the copied image file if it's a profile-owned file
+    image_url = row["image_url"]
+    if image_url:
+        filename = image_url.rsplit("/", 1)[-1]
+        if "_profile_" in filename:
+            path = os.path.join(UPLOAD_FOLDER, filename)
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    if sess.get("active_profile_id") == int(profile_id):
+        sess["active_profile_id"] = None
+        db_save_session(code)
+
+    emit("map_profiles_updated", {
+        "profiles": db_load_profiles(code),
+        "active_profile_id": sess.get("active_profile_id"),
+    }, room=code)
+
+
+@socketio.on("rename_map_profile")
+def on_rename_map_profile(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    profile_id = data.get("id")
+    name = str(data.get("name", "")).strip()[:50]
+    if not profile_id or not name:
+        return
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE map_profiles SET name = ? WHERE id = ? AND session_code = ?",
+            (name, int(profile_id), code)
+        )
+    emit("map_profiles_updated", {
+        "profiles": db_load_profiles(code),
+        "active_profile_id": sessions.get(code, {}).get("active_profile_id"),
+    }, room=code)
 
 
 @socketio.on("roll_dice")

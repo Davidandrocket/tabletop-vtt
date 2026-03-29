@@ -4,3 +4,4 @@ __pycache__/
 sessions.db
 static/uploads/
 creature_dump.json
+todo.md

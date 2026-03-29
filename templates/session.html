@@ -152,6 +152,16 @@
           <span class="sep">|</span>
           <button class="btn-sm btn-danger" onclick="clearMapImage()">Clear Map</button>
         </div>
+        <div class="map-profiles-section">
+          <details id="map-profiles-details">
+            <summary class="map-profiles-summary">Map Profiles</summary>
+            <div id="map-profiles-list"></div>
+            <div class="map-profiles-save">
+              <input id="profile-name-input" type="text" placeholder="Profile name" maxlength="50" class="profile-name-input">
+              <button class="btn-sm btn-green" onclick="saveMapProfile()">Save Current</button>
+            </div>
+          </details>
+        </div>
       </div>
       {% endif %}
 

@@ -104,6 +104,11 @@ socket.on("session_state", (data) => {
     window.addSpellShapeToMap?.(shape);
   }
 
+  // Load map profiles (DM only)
+  if (ROLE === "dm") {
+    renderMapProfiles(data.map_profiles || [], data.active_profile_id ?? null);
+  }
+
   // Chat history
   for (const msg of data.chat) {
     appendChat(msg, false);
@@ -149,6 +154,11 @@ socket.on("ping", (data) => {
 socket.on("spell_shape_added",   (data) => { window.addSpellShapeToMap?.(data); });
 socket.on("spell_shape_removed",  (data) => { window.removeSpellShapeFromMap?.(data.id); });
 socket.on("spell_shapes_cleared", ()     => { window.clearSpellShapesFromMap?.(); });
+
+socket.on("map_profiles_updated", (data) => {
+  if (ROLE !== "dm") return;
+  renderMapProfiles(data.profiles, data.active_profile_id ?? null);
+});
 
 socket.on("token_moved", (data) => {
   const token = sessionTokens[data.id];
@@ -666,6 +676,61 @@ function syncMapOffsetInputs(x, y) {
 function toggleMapImageControls(hasImage) {
   const nudgeEl = document.getElementById("map-nudge-controls");
   if (nudgeEl) nudgeEl.classList.toggle("hidden", !hasImage);
+}
+
+function renderMapProfiles(profiles, activeId) {
+  const list = document.getElementById("map-profiles-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!profiles || profiles.length === 0) {
+    list.innerHTML = '<div class="profiles-empty">No saved profiles.</div>';
+    return;
+  }
+  for (const p of profiles) {
+    const isActive = p.id === activeId;
+    const row = document.createElement("div");
+    row.className = "profile-row" + (isActive ? " profile-active" : "");
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "profile-name";
+    nameEl.textContent = p.name;
+    row.appendChild(nameEl);
+
+    if (!isActive) {
+      const loadBtn = document.createElement("button");
+      loadBtn.className = "btn-sm profile-btn";
+      loadBtn.textContent = "Load";
+      loadBtn.onclick = () => loadMapProfile(p.id);
+      row.appendChild(loadBtn);
+    }
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn-sm btn-danger profile-btn";
+    delBtn.textContent = "✕";
+    delBtn.title = "Delete profile";
+    delBtn.onclick = () => {
+      if (confirm(`Delete profile "${p.name}"?`)) deleteMapProfile(p.id);
+    };
+    row.appendChild(delBtn);
+
+    list.appendChild(row);
+  }
+}
+
+function saveMapProfile() {
+  const input = document.getElementById("profile-name-input");
+  const name = input?.value.trim();
+  if (!name) { input?.focus(); return; }
+  socket.emit("save_map_profile", { name });
+  if (input) input.value = "";
+}
+
+function loadMapProfile(id) {
+  socket.emit("load_map_profile", { id });
+}
+
+function deleteMapProfile(id) {
+  socket.emit("delete_map_profile", { id });
 }
 
 function showMapImageError(msg) {

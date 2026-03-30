@@ -510,8 +510,8 @@ function renderCharacterSheet(char) {
   const resources = char.resources || [];
   const resourceSection = document.getElementById("resources-section");
   const resourceList = document.getElementById("resource-list");
+  resourceList.innerHTML = "";
   if (resources.length > 0) {
-    resourceList.innerHTML = "";
     for (const res of resources) {
       const row = document.createElement("div");
       row.className = "resource-item";
@@ -520,14 +520,16 @@ function renderCharacterSheet(char) {
       resourceList.appendChild(row);
     }
     resourceSection.classList.remove("hidden");
+  } else {
+    resourceSection.classList.add("hidden");
   }
 
   // Spell slots
   const spellSlots = char.spell_slots || [];
   const spellSection = document.getElementById("spellslots-section");
   const spellList = document.getElementById("spellslot-list");
+  spellList.innerHTML = "";
   if (spellSlots.length > 0) {
-    spellList.innerHTML = "";
     for (const slot of spellSlots) {
       const row = document.createElement("div");
       row.className = "resource-item";
@@ -536,14 +538,16 @@ function renderCharacterSheet(char) {
       spellList.appendChild(row);
     }
     spellSection.classList.remove("hidden");
+  } else {
+    spellSection.classList.add("hidden");
   }
 
   // Conditions
   const conditions = char.conditions || [];
   const condSection = document.getElementById("conditions-section");
   const condList = document.getElementById("conditions-list");
+  condList.innerHTML = "";
   if (conditions.length > 0) {
-    condList.innerHTML = "";
     for (const cond of conditions) {
       const tag = document.createElement("span");
       tag.className = "condition-tag";
@@ -551,6 +555,8 @@ function renderCharacterSheet(char) {
       condList.appendChild(tag);
     }
     condSection.classList.remove("hidden");
+  } else {
+    condSection.classList.add("hidden");
   }
 }
 

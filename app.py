@@ -1185,7 +1185,10 @@ def on_refresh_character(data=None):
 # --- Helpers ---
 
 def parse_character(data, character_id):
-    creature = data.get("creatures", [{}])[0]
+    creatures = data.get("creatures", [])
+    if not creatures:
+        raise ValueError(f"DiceCloud returned no creature data (keys: {list(data.keys())})")
+    creature = creatures[0]
     variables = (data.get("creatureVariables") or [{}])[0]
     properties = data.get("creatureProperties", [])
 

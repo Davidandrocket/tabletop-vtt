@@ -117,6 +117,7 @@ socket.on("session_state", (data) => {
   // Load map profiles (DM only)
   if (ROLE === "dm") {
     renderMapProfiles(data.map_profiles || [], data.active_profile_id ?? null);
+    renderLibrary(data.token_library || []);
   }
 
   // Chat history
@@ -177,6 +178,10 @@ socket.on("fog_updated", (data) => {
   }
   window.renderFog?.(fogRevealed, ROLE === "dm");
   window.updateTokenFogVisibility?.();
+});
+
+socket.on("library_updated", (data) => {
+  if (ROLE === "dm") renderLibrary(data.entries || []);
 });
 
 socket.on("token_moved", (data) => {
@@ -898,6 +903,8 @@ function openEditToken(tokenId) {
   if (ROLE === "dm") {
     document.getElementById("edit-tok-hidden").checked = !!token.hidden;
     document.getElementById("edit-tok-show-hp").checked = token.show_hp !== false;
+    const initModEl = document.getElementById("edit-tok-initiative-mod");
+    if (initModEl) initModEl.value = token.initiative_mod ?? 0;
     playerSection.classList.remove("hidden");
     const select = document.getElementById("edit-tok-player-select");
     select.innerHTML = "";
@@ -956,6 +963,7 @@ function submitEditToken() {
     data.player_id = isPlayer ? document.getElementById("edit-tok-player-select").value : null;
     data.hidden = document.getElementById("edit-tok-hidden").checked;
     data.show_hp = document.getElementById("edit-tok-show-hp").checked;
+    data.initiative_mod = parseInt(document.getElementById("edit-tok-initiative-mod")?.value) || 0;
   }
   socket.emit("update_token", data);
   closeModal();
@@ -1159,6 +1167,75 @@ function escapeHtml(str) {
 }
 
 // --- Keyboard shortcuts ---
+
+// --- Token Library ---
+
+function renderLibrary(entries) {
+  const list = document.getElementById("library-list");
+  if (!list) return;
+  if (entries.length === 0) {
+    list.innerHTML = '<div class="library-empty">No entries yet. Save a token to start.</div>';
+    return;
+  }
+  list.innerHTML = "";
+  for (const entry of entries) {
+    const card = document.createElement("div");
+    card.className = "library-card";
+    card.draggable = true;
+    card.dataset.libraryId = entry.id;
+    card.innerHTML = `
+      <span class="lib-swatch" style="background:${entry.color}"></span>
+      <span class="lib-name">${entry.name}</span>
+      <span class="lib-hp">HP ${entry.max_hp}</span>
+      <button class="lib-delete" onclick="deleteLibraryEntry(${entry.id})" title="Delete">×</button>
+    `;
+    card.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("library_id", entry.id);
+      e.dataTransfer.effectAllowed = "copy";
+    });
+    list.appendChild(card);
+  }
+}
+
+function deleteLibraryEntry(id) {
+  if (!confirm("Remove this entry from the library?")) return;
+  socket.emit("delete_library_entry", { id });
+}
+
+function saveCurrentTokenToLibrary() {
+  const name = document.getElementById("edit-tok-name")?.value.trim();
+  if (!name) return;
+  socket.emit("save_to_library", {
+    name,
+    max_hp:         parseInt(document.getElementById("edit-tok-maxhp")?.value) || 10,
+    color:          document.getElementById("edit-tok-color")?.value || "#e74c3c",
+    image_url:      document.getElementById("edit-tok-image")?.value.trim() || null,
+    size:           parseInt(document.getElementById("edit-tok-size")?.value) || 1,
+    initiative_mod: parseInt(document.getElementById("edit-tok-initiative-mod")?.value) || 0,
+    show_hp:        document.getElementById("edit-tok-show-hp")?.checked ?? true,
+  });
+}
+
+// Drag library cards onto the map to spawn tokens
+if (ROLE === "dm") {
+  const mapContainer = document.getElementById("map-container");
+  if (mapContainer) {
+    mapContainer.addEventListener("dragover", (e) => {
+      if (Array.from(e.dataTransfer.types).includes("library_id")) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }
+    });
+    mapContainer.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const libraryId = e.dataTransfer.getData("library_id");
+      if (!libraryId) return;
+      const cell = window.clientCoordsToCell?.(e.clientX, e.clientY);
+      if (!cell) return;
+      socket.emit("spawn_library_token", { library_id: parseInt(libraryId), col: cell.col, row: cell.row });
+    });
+  }
+}
 
 document.addEventListener("keydown", (e) => {
   // Don't fire shortcuts when typing in an input

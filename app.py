@@ -75,10 +75,11 @@ def init_db():
         """)
         # Migrations: add columns introduced after initial schema
         for col, defn in [
-            ("image_url", "TEXT"),
-            ("size",      "INTEGER DEFAULT 1"),
-            ("hidden",    "INTEGER DEFAULT 0"),
-            ("show_hp",   "INTEGER DEFAULT 1"),
+            ("image_url",      "TEXT"),
+            ("size",           "INTEGER DEFAULT 1"),
+            ("hidden",         "INTEGER DEFAULT 0"),
+            ("show_hp",        "INTEGER DEFAULT 1"),
+            ("initiative_mod", "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE tokens ADD COLUMN {col} {defn}")
@@ -120,6 +121,19 @@ def init_db():
                 conn.execute(f"ALTER TABLE map_profiles ADD COLUMN {col} {defn}")
             except sqlite3.OperationalError:
                 pass
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS token_library (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                name           TEXT    NOT NULL,
+                max_hp         INTEGER DEFAULT 10,
+                color          TEXT    DEFAULT '#e74c3c',
+                image_url      TEXT,
+                size           INTEGER DEFAULT 1,
+                initiative_mod INTEGER DEFAULT 0,
+                show_hp        INTEGER DEFAULT 1
+            )
+        """)
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS player_characters (
@@ -191,8 +205,8 @@ def db_upsert_token(token, code):
             INSERT OR REPLACE INTO tokens
                 (id, session_code, name, x, y, hp, max_hp,
                  color, is_player, player_id, initiative, conditions,
-                 image_url, size, hidden, show_hp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 image_url, size, hidden, show_hp, initiative_mod)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             token["id"], code, token["name"],
             token["x"], token["y"],
@@ -206,6 +220,7 @@ def db_upsert_token(token, code):
             token.get("size", 1),
             1 if token.get("hidden") else 0,
             1 if token.get("show_hp", True) else 0,
+            token.get("initiative_mod", 0),
         ))
 
 
@@ -250,10 +265,11 @@ def db_load_session(code):
     tokens = {}
     for t in token_rows:
         token = dict(t)
-        token["is_player"]  = bool(token["is_player"])
-        token["hidden"]     = bool(token.get("hidden", 0))
-        token["show_hp"]    = bool(token.get("show_hp", 1))
-        token["conditions"] = json.loads(token.get("conditions") or "[]")
+        token["is_player"]     = bool(token["is_player"])
+        token["hidden"]        = bool(token.get("hidden", 0))
+        token["show_hp"]       = bool(token.get("show_hp", 1))
+        token["initiative_mod"] = int(token.get("initiative_mod") or 0)
+        token["conditions"]    = json.loads(token.get("conditions") or "[]")
         tokens[token["id"]] = token
 
     sessions[code] = {
@@ -277,6 +293,14 @@ def db_load_session(code):
         "fog": {(int(c[0]), int(c[1])) for c in json.loads(row["fog"] or "[]")},
     }
     return True
+
+
+def db_load_library():
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM token_library ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def db_load_profiles(code):
@@ -341,7 +365,8 @@ def gen_code(length=6):
 
 
 def make_token(name, x=0, y=0, hp=10, max_hp=10, color="#e74c3c",
-               is_player=False, player_id=None, image_url=None, size=1, show_hp=None):
+               is_player=False, player_id=None, image_url=None, size=1,
+               show_hp=None, initiative_mod=0):
     return {
         "id": str(uuid.uuid4())[:8],
         "name": name,
@@ -351,6 +376,7 @@ def make_token(name, x=0, y=0, hp=10, max_hp=10, color="#e74c3c",
         "is_player": is_player,
         "player_id": player_id,
         "initiative": 0,
+        "initiative_mod": initiative_mod,
         "conditions": [],
         "image_url": image_url,
         "size": size,
@@ -502,6 +528,7 @@ def on_connect():
         "map_profiles": db_load_profiles(code),
         "active_profile_id": sess.get("active_profile_id"),
         "fog": [list(c) for c in sess.get("fog", set())],
+        "token_library": db_load_library() if role == "dm" else [],
     })
     emit("player_joined", {"name": name, "role": role, "sid": request.sid, "uuid": player_uuid},
          room=code, include_self=False)
@@ -677,6 +704,8 @@ def on_update_token(data):
             token["hidden"] = bool(data["hidden"])
         if "show_hp" in data:
             token["show_hp"] = bool(data["show_hp"])
+        if "initiative_mod" in data:
+            token["initiative_mod"] = int(data["initiative_mod"])
     db_upsert_token(token, code)
     emit("token_updated", token, room=code)
 
@@ -1088,6 +1117,99 @@ def on_fog_reset(data):
     fog_list = [list(c) for c in sess["fog"]]
     db_save_session(code)
     emit("fog_updated", {"fog": fog_list}, room=code)
+
+
+# Token Library (global, DM only)
+
+@socketio.on("save_to_library")
+def on_save_to_library(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    name = str(data.get("name", "Token")).strip()[:50] or "Token"
+    max_hp = max(1, int(data.get("max_hp", 10)))
+    color = str(data.get("color", "#e74c3c"))[:7]
+    image_url = data.get("image_url") or None
+    size = max(1, min(4, int(data.get("size", 1))))
+    initiative_mod = int(data.get("initiative_mod", 0))
+    show_hp = bool(data.get("show_hp", True))
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO token_library
+                (name, max_hp, color, image_url, size, initiative_mod, show_hp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (name, max_hp, color, image_url, size, initiative_mod, 1 if show_hp else 0))
+    emit("library_updated", {"entries": db_load_library()})
+
+
+@socketio.on("update_library_entry")
+def on_update_library_entry(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    entry_id = data.get("id")
+    if entry_id is None:
+        return
+    name = str(data.get("name", "Token")).strip()[:50] or "Token"
+    max_hp = max(1, int(data.get("max_hp", 10)))
+    color = str(data.get("color", "#e74c3c"))[:7]
+    image_url = data.get("image_url") or None
+    size = max(1, min(4, int(data.get("size", 1))))
+    initiative_mod = int(data.get("initiative_mod", 0))
+    show_hp = bool(data.get("show_hp", True))
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE token_library
+            SET name=?, max_hp=?, color=?, image_url=?, size=?, initiative_mod=?, show_hp=?
+            WHERE id=?
+        """, (name, max_hp, color, image_url, size, initiative_mod, 1 if show_hp else 0, int(entry_id)))
+    emit("library_updated", {"entries": db_load_library()})
+
+
+@socketio.on("delete_library_entry")
+def on_delete_library_entry(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    entry_id = data.get("id")
+    if entry_id is None:
+        return
+    with get_db() as conn:
+        conn.execute("DELETE FROM token_library WHERE id = ?", (int(entry_id),))
+    emit("library_updated", {"entries": db_load_library()})
+
+
+@socketio.on("spawn_library_token")
+def on_spawn_library_token(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    entry_id = data.get("library_id")
+    col = max(0, int(data.get("col", 0)))
+    row = max(0, int(data.get("row", 0)))
+    with get_db() as conn:
+        db_row = conn.execute(
+            "SELECT * FROM token_library WHERE id = ?", (int(entry_id),)
+        ).fetchone()
+    if not db_row:
+        return
+    token = make_token(
+        name=db_row["name"],
+        x=col, y=row,
+        hp=db_row["max_hp"], max_hp=db_row["max_hp"],
+        color=db_row["color"],
+        image_url=db_row["image_url"],
+        size=db_row["size"],
+        show_hp=bool(db_row["show_hp"]),
+        initiative_mod=db_row["initiative_mod"],
+    )
+    sess["tokens"][token["id"]] = token
+    db_upsert_token(token, code)
+    emit("token_added", token, room=code)
 
 
 @socketio.on("roll_dice")

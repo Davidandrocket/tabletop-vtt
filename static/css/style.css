@@ -652,6 +652,63 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 .map-fog-reveal-btn { bottom: 68px; }
 .map-fog-hide-btn   { bottom: 16px; }
 
+/* Token Library panel */
+.map-controls-library { padding: 6px 10px; }
+.library-summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  user-select: none;
+  list-style: none;
+}
+.library-summary::-webkit-details-marker { display: none; }
+.library-summary::before { content: "▸ "; }
+details[open] .library-summary::before { content: "▾ "; }
+#library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.library-empty { font-size: 0.78rem; color: var(--text-muted); padding: 2px 0; }
+.library-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  cursor: grab;
+  user-select: none;
+}
+.library-card:hover { background: rgba(255,255,255,0.08); border-color: var(--accent2); }
+.library-card:active { cursor: grabbing; }
+.lib-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.2);
+}
+.lib-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-hp { font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0; }
+.lib-delete {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.lib-delete:hover { color: var(--danger); }
+
 /* Spell shape picker panel */
 .spell-picker {
   position: absolute;

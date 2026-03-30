@@ -169,6 +169,12 @@
           </details>
         </div>
       </div>
+      <div class="map-controls map-controls-library">
+        <details id="library-details">
+          <summary class="library-summary">Token Library</summary>
+          <div id="library-list"></div>
+        </details>
+      </div>
       {% endif %}
 
       <!-- Map tool buttons (always visible) -->
@@ -367,6 +373,7 @@
       </div>
 
       <div id="edit-tok-player-section" class="hidden">
+        <label>Initiative Mod <input id="edit-tok-initiative-mod" type="number" value="0" style="width:60px"></label>
         <label class="checkbox-label">
           <input id="edit-tok-hidden" type="checkbox"> Hidden from players
         </label>
@@ -384,6 +391,7 @@
       </div>
       <div class="modal-actions">
         <button class="btn-primary" onclick="submitEditToken()">Save</button>
+        <button class="btn-sm btn-green" onclick="saveCurrentTokenToLibrary()" title="Save this token as a reusable library template">+ Library</button>
         <button onclick="closeModal()">Cancel</button>
       </div>
     </div>

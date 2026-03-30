@@ -1381,3 +1381,14 @@ function toggleFogMode(mode) {
   }
 }
 window.toggleFogMode = toggleFogMode;
+
+// Convert browser client coordinates to grid cell (accounting for stage pan/zoom)
+window.clientCoordsToCell = (clientX, clientY) => {
+  const container = document.getElementById("map-container");
+  const rect = container.getBoundingClientRect();
+  const scale = stage.scaleX();
+  const pos = stage.position();
+  const canvasX = (clientX - rect.left - pos.x) / scale;
+  const canvasY = (clientY - rect.top  - pos.y) / scale;
+  return { col: Math.floor(canvasX / GRID), row: Math.floor(canvasY / GRID) };
+};

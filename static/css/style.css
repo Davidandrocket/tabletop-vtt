@@ -653,18 +653,6 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 .map-fog-hide-btn   { bottom: 16px; }
 
 /* Token Library panel */
-.map-controls-library { padding: 6px 10px; }
-.library-summary {
-  cursor: pointer;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  user-select: none;
-  list-style: none;
-}
-.library-summary::-webkit-details-marker { display: none; }
-.library-summary::before { content: "▸ "; }
-details[open] .library-summary::before { content: "▾ "; }
 #library-list {
   display: flex;
   flex-direction: column;

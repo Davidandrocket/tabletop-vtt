@@ -324,7 +324,8 @@ function addTokenToMap(token) {
     listening: false,
   }));
 
-  // HP bar
+  // HP bar — hidden from players for NPC tokens unless show_hp is true
+  const showHpBar = isDM || token.show_hp !== false;
   const barW = radius * 2;
   const barH = Math.max(4, size * 3);
   group.add(new Konva.Rect({
@@ -332,6 +333,7 @@ function addTokenToMap(token) {
     width: barW, height: barH,
     fill: "#333", cornerRadius: 2,
     name: "hp-bg", listening: false,
+    visible: showHpBar,
   }));
 
   const hpPct = token.max_hp > 0 ? token.hp / token.max_hp : 1;
@@ -340,6 +342,7 @@ function addTokenToMap(token) {
     width: barW * hpPct, height: barH,
     fill: hpColor(hpPct), cornerRadius: 2,
     name: "hp-fill", listening: false,
+    visible: showHpBar,
   }));
 
   // Name label
@@ -480,11 +483,16 @@ function updateTokenOnMap(token) {
   group.x((token.x + size / 2) * GRID);
   group.y((token.y + size / 2) * GRID);
 
+  const isDM = document.body.dataset.role === "dm";
+  const showHpBar = isDM || token.show_hp !== false;
   const hpPct = token.max_hp > 0 ? token.hp / token.max_hp : 1;
+  const hpBg = group.findOne(".hp-bg");
+  if (hpBg) hpBg.visible(showHpBar);
   const fill = group.findOne(".hp-fill");
   if (fill) {
     fill.width(radius * 2 * hpPct);
     fill.fill(hpColor(hpPct));
+    fill.visible(showHpBar);
   }
 
   const label = group.findOne(".label");

@@ -599,10 +599,15 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 .chat-log::-webkit-scrollbar { width: 4px; }
 .chat-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
+.dice-dm-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.dice-hint { font-size: 0.72rem; color: var(--text-muted); }
+
 .chat-entry { line-height: 1.4; word-break: break-word; }
 .chat-entry .chat-who { font-weight: 700; color: var(--accent2); }
 .chat-entry.dice-entry .chat-who { color: var(--yellow); }
 .chat-entry .dice-detail { font-size: 0.75rem; color: var(--text-dim); }
+.chat-entry.dice-private { opacity: 0.75; font-style: italic; }
+.dice-private-tag { font-size: 0.7rem; }
 
 .chat-input-row { display: flex; gap: 6px; }
 .chat-input-row input { flex: 1; margin: 0; }

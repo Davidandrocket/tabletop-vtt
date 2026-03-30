@@ -249,6 +249,12 @@
             <button onclick="quickRoll('1d20')">d20</button>
             <button onclick="quickRoll('1d100')">d100</button>
           </div>
+          {% if role == 'dm' %}
+          <div class="dice-dm-row">
+            <label class="checkbox-label"><input type="checkbox" id="dice-private"> Private</label>
+            <span class="dice-hint">Tip: 1d20(17) forces the result</span>
+          </div>
+          {% endif %}
         </div>
 
         <div class="section-block chat-section">
@@ -352,6 +358,9 @@
       <div id="edit-tok-player-section" class="hidden">
         <label class="checkbox-label">
           <input id="edit-tok-hidden" type="checkbox"> Hidden from players
+        </label>
+        <label class="checkbox-label">
+          <input id="edit-tok-show-hp" type="checkbox"> Show HP bar to players
         </label>
         <label class="checkbox-label">
           <input id="edit-tok-isplayer" type="checkbox"> Player token

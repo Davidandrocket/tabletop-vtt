@@ -78,6 +78,7 @@ def init_db():
             ("image_url", "TEXT"),
             ("size",      "INTEGER DEFAULT 1"),
             ("hidden",    "INTEGER DEFAULT 0"),
+            ("show_hp",   "INTEGER DEFAULT 1"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE tokens ADD COLUMN {col} {defn}")
@@ -179,8 +180,8 @@ def db_upsert_token(token, code):
             INSERT OR REPLACE INTO tokens
                 (id, session_code, name, x, y, hp, max_hp,
                  color, is_player, player_id, initiative, conditions,
-                 image_url, size, hidden)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 image_url, size, hidden, show_hp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             token["id"], code, token["name"],
             token["x"], token["y"],
@@ -193,6 +194,7 @@ def db_upsert_token(token, code):
             token.get("image_url"),
             token.get("size", 1),
             1 if token.get("hidden") else 0,
+            1 if token.get("show_hp", True) else 0,
         ))
 
 
@@ -237,8 +239,9 @@ def db_load_session(code):
     tokens = {}
     for t in token_rows:
         token = dict(t)
-        token["is_player"] = bool(token["is_player"])
-        token["hidden"]    = bool(token.get("hidden", 0))
+        token["is_player"]  = bool(token["is_player"])
+        token["hidden"]     = bool(token.get("hidden", 0))
+        token["show_hp"]    = bool(token.get("show_hp", 1))
         token["conditions"] = json.loads(token.get("conditions") or "[]")
         tokens[token["id"]] = token
 
@@ -326,7 +329,7 @@ def gen_code(length=6):
 
 
 def make_token(name, x=0, y=0, hp=10, max_hp=10, color="#e74c3c",
-               is_player=False, player_id=None, image_url=None, size=1):
+               is_player=False, player_id=None, image_url=None, size=1, show_hp=None):
     return {
         "id": str(uuid.uuid4())[:8],
         "name": name,
@@ -340,6 +343,8 @@ def make_token(name, x=0, y=0, hp=10, max_hp=10, color="#e74c3c",
         "image_url": image_url,
         "size": size,
         "hidden": False,
+        # Player tokens show HP by default; NPC tokens hide it
+        "show_hp": is_player if show_hp is None else bool(show_hp),
     }
 
 
@@ -656,6 +661,8 @@ def on_update_token(data):
             token["player_id"] = _resolve_player_id(data["player_id"], sess)
         if "hidden" in data:
             token["hidden"] = bool(data["hidden"])
+        if "show_hp" in data:
+            token["show_hp"] = bool(data["show_hp"])
     db_upsert_token(token, code)
     emit("token_updated", token, room=code)
 
@@ -1022,22 +1029,44 @@ def on_roll_dice(data):
     info = socket_info.get(request.sid)
     if not info:
         return
-    result = roll(data.get("notation", "1d20"))
+
+    notation = data.get("notation", "1d20")
+    private = bool(data.get("private", False)) and info["role"] == "dm"
+
+    # DM fake roll: "1d20(17)" forces the displayed result to 17
+    forced = None
+    notation_clean = notation
+    if info["role"] == "dm":
+        fm = re.match(r"^(.+)\((\d+)\)$", notation.replace(" ", ""))
+        if fm:
+            notation_clean = fm.group(1)
+            forced = int(fm.group(2))
+
+    result = roll(notation_clean)
     if result is None:
         emit("error_msg", {"message": "Invalid dice notation."})
         return
+
+    if forced is not None:
+        result["total"] = forced
+        result["rolls"] = [forced]
+
     msg = {
         "name": info["name"],
-        "notation": data.get("notation", "1d20"),
+        "notation": notation_clean,
         "result": result["total"],
         "rolls": result["rolls"],
         "modifier": result["modifier"],
         "type": "dice",
     }
     code = info["code"]
-    sessions[code]["chat"].append(msg)
-    db_append_chat(msg, code)
-    emit("chat_entry", msg, room=code)
+    if private:
+        msg["private"] = True
+        emit("chat_entry", msg)  # only to the DM who rolled
+    else:
+        sessions[code]["chat"].append(msg)
+        db_append_chat(msg, code)
+        emit("chat_entry", msg, room=code)
 
 
 # Chat

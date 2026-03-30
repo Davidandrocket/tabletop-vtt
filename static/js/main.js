@@ -867,6 +867,7 @@ function openEditToken(tokenId) {
   const playerSection = document.getElementById("edit-tok-player-section");
   if (ROLE === "dm") {
     document.getElementById("edit-tok-hidden").checked = !!token.hidden;
+    document.getElementById("edit-tok-show-hp").checked = token.show_hp !== false;
     playerSection.classList.remove("hidden");
     const select = document.getElementById("edit-tok-player-select");
     select.innerHTML = "";
@@ -924,6 +925,7 @@ function submitEditToken() {
     data.is_player = isPlayer;
     data.player_id = isPlayer ? document.getElementById("edit-tok-player-select").value : null;
     data.hidden = document.getElementById("edit-tok-hidden").checked;
+    data.show_hp = document.getElementById("edit-tok-show-hp").checked;
   }
   socket.emit("update_token", data);
   closeModal();
@@ -1068,12 +1070,15 @@ function updateTurnIndicator(tokenId) {
 
 function rollDice() {
   const notation = document.getElementById("dice-notation").value.trim();
-  if (notation) socket.emit("roll_dice", { notation });
+  if (!notation) return;
+  const privateRoll = document.getElementById("dice-private")?.checked ?? false;
+  socket.emit("roll_dice", { notation, private: privateRoll });
 }
 
 function quickRoll(notation) {
   document.getElementById("dice-notation").value = notation;
-  socket.emit("roll_dice", { notation });
+  const privateRoll = document.getElementById("dice-private")?.checked ?? false;
+  socket.emit("roll_dice", { notation, private: privateRoll });
 }
 
 // --- Chat ---
@@ -1091,11 +1096,12 @@ function appendChat(msg, scroll = true) {
   const entry = document.createElement("div");
 
   if (msg.type === "dice") {
-    entry.className = "chat-entry dice-entry";
+    entry.className = "chat-entry dice-entry" + (msg.private ? " dice-private" : "");
     const rollDetail = msg.rolls.length > 1
       ? ` [${msg.rolls.join(", ")}]${msg.modifier !== 0 ? (msg.modifier > 0 ? `+${msg.modifier}` : msg.modifier) : ""}`
       : "";
-    entry.innerHTML = `<span class="chat-who">${msg.name}</span> rolled <strong>${msg.notation}</strong>: <strong>${msg.result}</strong><span class="dice-detail">${rollDetail}</span>`;
+    const privateTag = msg.private ? '<span class="dice-private-tag">🔒 </span>' : "";
+    entry.innerHTML = `${privateTag}<span class="chat-who">${msg.name}</span> rolled <strong>${msg.notation}</strong>: <strong>${msg.result}</strong><span class="dice-detail">${rollDetail}</span>`;
   } else {
     entry.className = "chat-entry";
     entry.innerHTML = `<span class="chat-who">${msg.name}:</span> ${escapeHtml(msg.text)}`;

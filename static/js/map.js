@@ -154,7 +154,8 @@ function initMap(cols, rows) {
   stage.on("click.ping tap.ping", () => {
     if (!pingActive) return;
     const cell = stagePointerToCell();
-    window.socketEmit("ping", { x: cell.col, y: cell.row });
+    const color = document.getElementById("ping-color-input")?.value || "#4ECCA3";
+    window.socketEmit("ping", { x: cell.col, y: cell.row, color });
   });
 
   // Ruler: mouse + touch — start, update, clear
@@ -766,14 +767,14 @@ function toggleRulerMode() {
   if (!rulerActive) clearRuler();
 }
 
-function showPing(col, row) {
+function showPing(col, row, color = "#4ECCA3") {
   const x = (col + 0.5) * GRID;
   const y = (row + 0.5) * GRID;
 
   function ripple(delay) {
     const circle = new Konva.Circle({
       x, y, radius: 6,
-      stroke: "#4ECCA3", strokeWidth: 2.5, opacity: 1,
+      stroke: color, strokeWidth: 2.5, opacity: 1,
     });
     pingLayer.add(circle);
     pingLayer.batchDraw();
@@ -798,6 +799,7 @@ function togglePingMode() {
   pingActive = !pingActive;
   setToolActive(rulerActive || pingActive || spellActive);
   document.getElementById("ping-btn").classList.toggle("active", pingActive);
+  document.getElementById("ping-color-input")?.classList.toggle("hidden", !pingActive);
 }
 
 // --- Spell overlay tool ---

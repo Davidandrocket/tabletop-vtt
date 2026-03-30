@@ -148,7 +148,7 @@ socket.on("token_removed", (data) => {
 });
 
 socket.on("ping", (data) => {
-  showPing(data.x, data.y);
+  showPing(data.x, data.y, data.color);
 });
 
 socket.on("spell_shape_added",   (data) => { window.addSpellShapeToMap?.(data); });
@@ -421,6 +421,34 @@ socket.on("character_loaded", (data) => {
   resetRefreshBtn();
 });
 
+socket.on("character_removed", (data) => {
+  const charId = data.character_id;
+  if (ROLE === "dm") {
+    // Remove from DM party panel
+    delete partyCharacters[charId];
+    document.getElementById(`party-card-${charId}`)?.remove();
+    const list = document.getElementById("party-list");
+    if (list && list.children.length === 0) {
+      list.innerHTML = '<div id="party-empty" class="party-empty">No characters loaded yet.</div>';
+    }
+    return;
+  }
+  // Player: remove tab and fall back
+  delete playerCharacters[charId];
+  document.getElementById(`char-tab-${charId}`)?.remove();
+  if (currentCharId === charId) {
+    currentCharId = null;
+    const remaining = Object.keys(playerCharacters);
+    if (remaining.length > 0) {
+      switchToCharacter(remaining[0]);
+    } else {
+      document.getElementById("char-stats")?.classList.add("hidden");
+      document.getElementById("char-tabs-bar")?.classList.add("hidden");
+      showDcLoginForm();
+    }
+  }
+});
+
 socket.on("character_shared", (data) => {
   if (ROLE !== "dm") return;
   const key = data.character_id || data.player_uuid;
@@ -603,6 +631,13 @@ function refreshCharacter() {
   const errEl = document.getElementById("dc-error");
   if (errEl) errEl.classList.add("hidden");
   socket.emit("refresh_character", { character_id: currentCharId });
+}
+
+function removeCharacter() {
+  if (!currentCharId) return;
+  const char = playerCharacters[currentCharId];
+  if (!confirm(`Remove ${char?.name || "this character"}?`)) return;
+  socket.emit("remove_character", { character_id: currentCharId });
 }
 
 function resetRefreshBtn() {

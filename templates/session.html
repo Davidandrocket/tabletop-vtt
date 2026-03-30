@@ -106,6 +106,9 @@
             <h4>Active Effects</h4>
             <div id="conditions-list"></div>
           </div>
+          {% if role == 'player' %}
+          <button class="btn-sm btn-danger remove-char-btn" onclick="removeCharacter()">Remove Character</button>
+          {% endif %}
         </div>
 
       </div>
@@ -196,6 +199,7 @@
       <button id="ping-btn" class="btn-sm map-tool-btn map-ping-btn" onclick="togglePingMode()" title="Ping (click map to mark a location)">
         <img src="/static/tools/ping.svg" alt="Ping" width="16" height="16">
       </button>
+      <input type="color" id="ping-color-input" value="#4ECCA3" class="ping-color-input hidden" title="Ping color">
       <button id="ruler-btn" class="btn-sm map-tool-btn map-ruler-btn" onclick="toggleRulerMode()" title="Ruler (measure distance)">
         <img src="/static/tools/ruler.svg" alt="Ruler" width="16" height="16">
       </button>

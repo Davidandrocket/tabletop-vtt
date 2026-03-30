@@ -792,7 +792,11 @@ def on_ping(data):
     info = socket_info.get(request.sid)
     if not info:
         return
-    emit("ping", {"x": data.get("x", 0), "y": data.get("y", 0)}, room=info["code"])
+    emit("ping", {
+        "x": data.get("x", 0),
+        "y": data.get("y", 0),
+        "color": str(data.get("color", "#4ECCA3"))[:7],
+    }, room=info["code"])
 
 
 # Spell shape overlays (DM only; broadcast to all clients in room)
@@ -1180,6 +1184,38 @@ def on_refresh_character(data=None):
             emit("dicecloud_error", {"message": f"DiceCloud error: {e.response.status_code}"})
     except Exception as e:
         emit("dicecloud_error", {"message": str(e)})
+
+
+@socketio.on("remove_character")
+def on_remove_character(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "player":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    character_id = data.get("character_id")
+    if not character_id:
+        return
+    player_uuid = info.get("player_uuid")
+
+    # Remove from in-memory session
+    if request.sid in sess["players"]:
+        sess["players"][request.sid]["characters"].pop(character_id, None)
+
+    # Remove from DB
+    if player_uuid:
+        with get_db() as conn:
+            conn.execute(
+                "DELETE FROM player_characters WHERE session_code = ? AND player_uuid = ? AND character_id = ?",
+                (code, player_uuid, character_id)
+            )
+
+    emit("character_removed", {"character_id": character_id})
+    dm_socket = sess.get("dm_socket")
+    if dm_socket:
+        emit("character_removed", {"character_id": character_id, "player_uuid": player_uuid}, room=dm_socket)
 
 
 # --- Helpers ---

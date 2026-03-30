@@ -134,6 +134,9 @@
           <input id="grid-rows" type="number" value="15" min="5" max="50" class="grid-size-input">
         </label>
         <button class="btn-sm" onclick="applyGridSize()">Apply</button>
+        <span class="sep">|</span>
+        <button class="btn-sm btn-green" onclick="fogRevealAll()" title="Reveal all cells">Reveal All</button>
+        <button class="btn-sm btn-danger" onclick="fogResetAll()" title="Fog entire map">Fog All</button>
       </div>
       {% endif %}
 
@@ -206,6 +209,14 @@
       <button class="btn-sm map-tool-btn map-reset-btn" onclick="resetMapView()" title="Reset view (Home key)">
         <img src="/static/tools/reset.svg" alt="Reset view" width="16" height="16">
       </button>
+      {% if role == 'dm' %}
+      <button id="fog-reveal-btn" class="btn-sm map-tool-btn map-fog-reveal-btn" onclick="toggleFogMode('reveal')" title="Fog Reveal (drag to reveal cells)">
+        <img src="/static/tools/fog-reveal.svg" alt="Reveal" width="16" height="16">
+      </button>
+      <button id="fog-hide-btn" class="btn-sm map-tool-btn map-fog-hide-btn" onclick="toggleFogMode('hide')" title="Fog Hide (drag to hide cells)">
+        <img src="/static/tools/fog-hide.svg" alt="Hide" width="16" height="16">
+      </button>
+      {% endif %}
 
       <!-- Selected token HP editor -->
       <div id="token-hp-editor" class="token-hp-editor hidden">

@@ -631,13 +631,13 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 .map-tool-btn img { filter: invert(1); display: block; width: 24px; height: 24px; }
 .map-tool-btn.active img { filter: invert(0) brightness(0); }
 
-.map-spell-btn  { bottom: 224px; }
-.map-select-btn { bottom: 172px; }
-.map-ping-btn   { bottom: 120px; }
+.map-spell-btn  { bottom: 328px; }
+.map-select-btn { bottom: 276px; }
+.map-ping-btn   { bottom: 224px; }
 .ping-color-input {
   position: absolute;
   right: 56px;
-  bottom: 122px;
+  bottom: 226px;
   width: 36px;
   height: 36px;
   padding: 3px;
@@ -647,8 +647,10 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
   cursor: pointer;
   z-index: 10;
 }
-.map-ruler-btn  { bottom: 68px; }
-.map-reset-btn  { bottom: 16px; }
+.map-ruler-btn      { bottom: 172px; }
+.map-reset-btn      { bottom: 120px; }
+.map-fog-reveal-btn { bottom: 68px; }
+.map-fog-hide-btn   { bottom: 16px; }
 
 /* Spell shape picker panel */
 .spell-picker {
@@ -890,11 +892,13 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 
   /* Tool buttons: slightly larger tap targets */
   .map-tool-btn { width: 44px; height: 44px; }
-  .map-spell-btn  { bottom: 242px; }
-  .map-select-btn { bottom: 186px; }
-  .map-ping-btn   { bottom: 130px; }
-  .ping-color-input { bottom: 132px; }
-  .map-ruler-btn  { bottom: 74px; }
-  .map-reset-btn  { bottom: 18px; }
+  .map-spell-btn  { bottom: 354px; }
+  .map-select-btn { bottom: 298px; }
+  .map-ping-btn   { bottom: 242px; }
+  .ping-color-input { bottom: 244px; }
+  .map-ruler-btn      { bottom: 186px; }
+  .map-reset-btn      { bottom: 130px; }
+  .map-fog-reveal-btn { bottom: 74px; }
+  .map-fog-hide-btn   { bottom: 18px; }
   .spell-picker { right: 58px; }
 }

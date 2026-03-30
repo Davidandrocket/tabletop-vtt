@@ -91,6 +91,7 @@ def init_db():
             ("map_image_scale",  "REAL DEFAULT 1"),   # used as scale_x
             ("map_image_scale_y","REAL DEFAULT 1"),
             ("active_profile_id","INTEGER"),
+            ("fog",              "TEXT DEFAULT '[]'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
@@ -111,6 +112,14 @@ def init_db():
                 rows         INTEGER DEFAULT 15
             )
         """)
+
+        for col, defn in [
+            ("fog", "TEXT DEFAULT '[]'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE map_profiles ADD COLUMN {col} {defn}")
+            except sqlite3.OperationalError:
+                pass
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS player_characters (
@@ -151,13 +160,14 @@ def db_session_exists(code):
 
 def db_save_session(code):
     sess = sessions[code]
+    fog_list = [list(c) for c in sess.get("fog", set())]
     with get_db() as conn:
         conn.execute("""
             INSERT OR REPLACE INTO sessions
                 (code, dm_name, map_cols, map_rows, initiative_order, current_turn,
                  map_image_url, map_offset_x, map_offset_y, map_image_scale, map_image_scale_y,
-                 active_profile_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 active_profile_id, fog)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             code,
             sess["dm_name"],
@@ -171,6 +181,7 @@ def db_save_session(code):
             sess["map"].get("scale_x", 1),
             sess["map"].get("scale_y", 1),
             sess.get("active_profile_id"),
+            json.dumps(fog_list),
         ))
 
 
@@ -263,6 +274,7 @@ def db_load_session(code):
         "chat": [json.loads(r["data"]) for r in reversed(chat_rows)],
         "spell_shapes": {},
         "active_profile_id": row["active_profile_id"],
+        "fog": {(int(c[0]), int(c[1])) for c in json.loads(row["fog"] or "[]")},
     }
     return True
 
@@ -373,6 +385,7 @@ def create_session():
         "chat": [],
         "spell_shapes": {},
         "active_profile_id": None,
+        "fog": set(),
     }
     db_save_session(code)
 
@@ -488,6 +501,7 @@ def on_connect():
         "spell_shapes": list(sess.get("spell_shapes", {}).values()),
         "map_profiles": db_load_profiles(code),
         "active_profile_id": sess.get("active_profile_id"),
+        "fog": [list(c) for c in sess.get("fog", set())],
     })
     emit("player_joined", {"name": name, "role": role, "sid": request.sid, "uuid": player_uuid},
          room=code, include_self=False)
@@ -894,16 +908,18 @@ def on_save_map_profile(data):
             shutil.copy2(src, dst)
             image_url = f"/static/uploads/{profile_filename}"
 
+    fog_list = [list(c) for c in sess.get("fog", set())]
     with get_db() as conn:
         cursor = conn.execute("""
             INSERT INTO map_profiles
-                (session_code, name, image_url, offset_x, offset_y, scale_x, scale_y, cols, rows)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (session_code, name, image_url, offset_x, offset_y, scale_x, scale_y, cols, rows, fog)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             code, name, image_url,
             current_map.get("offset_x", 0), current_map.get("offset_y", 0),
             current_map.get("scale_x", 1), current_map.get("scale_y", 1),
             current_map.get("cols", 20), current_map.get("rows", 15),
+            json.dumps(fog_list),
         ))
         profile_id = cursor.lastrowid
 
@@ -935,6 +951,7 @@ def on_load_map_profile(data):
     if not row:
         return
 
+    fog_raw = json.loads(row["fog"] or "[]")
     sess["map"]["image_url"] = row["image_url"]
     sess["map"]["offset_x"]  = row["offset_x"]
     sess["map"]["offset_y"]  = row["offset_y"]
@@ -944,6 +961,7 @@ def on_load_map_profile(data):
     sess["map"]["rows"]      = row["rows"]
     sess["active_profile_id"] = row["id"]
     sess["spell_shapes"] = {}
+    sess["fog"] = {(int(c[0]), int(c[1])) for c in fog_raw}
 
     db_save_session(code)
     emit("map_resized", {"cols": row["cols"], "rows": row["rows"]}, room=code)
@@ -955,6 +973,7 @@ def on_load_map_profile(data):
         "scale_y": row["scale_y"],
     }, room=code)
     emit("spell_shapes_cleared", {}, room=code)
+    emit("fog_updated", {"fog": fog_raw}, room=code)
     emit("map_profiles_updated", {
         "profiles": db_load_profiles(code),
         "active_profile_id": row["id"],
@@ -1022,6 +1041,53 @@ def on_rename_map_profile(data):
         "profiles": db_load_profiles(code),
         "active_profile_id": sessions.get(code, {}).get("active_profile_id"),
     }, room=code)
+
+
+# Fog of War (DM only)
+
+@socketio.on("fog_paint")
+def on_fog_paint(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    cells = data.get("cells", [])
+    mode = data.get("mode", "reveal")
+    fog = sess.setdefault("fog", set())
+    for cell in cells:
+        if len(cell) == 2:
+            key = (int(cell[0]), int(cell[1]))
+            if mode == "reveal":
+                fog.add(key)
+            else:
+                fog.discard(key)
+    fog_list = [list(c) for c in fog]
+    db_save_session(code)
+    emit("fog_updated", {"fog": fog_list}, room=code)
+
+
+@socketio.on("fog_reset")
+def on_fog_reset(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    mode = data.get("mode", "all_fogged")
+    cols = sess["map"].get("cols", 20)
+    rows = sess["map"].get("rows", 15)
+    if mode == "all_revealed":
+        sess["fog"] = {(c, r) for c in range(cols) for r in range(rows)}
+    else:
+        sess["fog"] = set()
+    fog_list = [list(c) for c in sess["fog"]]
+    db_save_session(code)
+    emit("fog_updated", {"fog": fog_list}, room=code)
 
 
 @socketio.on("roll_dice")

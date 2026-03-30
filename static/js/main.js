@@ -36,6 +36,8 @@ const MY_NAME = document.body.dataset.name;
 
 let socket;
 let sessionTokens = {};     // token_id -> token
+let fogRevealed = new Set(); // "col,row" strings of revealed cells
+window.fogRevealed = fogRevealed;
 let initiativeOrder = [];
 let currentTurn = -1;
 let onlinePlayers = {};     // sid -> { name }
@@ -104,6 +106,14 @@ socket.on("session_state", (data) => {
     window.addSpellShapeToMap?.(shape);
   }
 
+  // Load fog of war
+  fogRevealed.clear();
+  for (const [col, row] of (data.fog || [])) {
+    fogRevealed.add(`${col},${row}`);
+  }
+  window.renderFog?.(fogRevealed, ROLE === "dm");
+  window.updateTokenFogVisibility?.();
+
   // Load map profiles (DM only)
   if (ROLE === "dm") {
     renderMapProfiles(data.map_profiles || [], data.active_profile_id ?? null);
@@ -158,6 +168,15 @@ socket.on("spell_shapes_cleared", ()     => { window.clearSpellShapesFromMap?.()
 socket.on("map_profiles_updated", (data) => {
   if (ROLE !== "dm") return;
   renderMapProfiles(data.profiles, data.active_profile_id ?? null);
+});
+
+socket.on("fog_updated", (data) => {
+  fogRevealed.clear();
+  for (const [col, row] of (data.fog || [])) {
+    fogRevealed.add(`${col},${row}`);
+  }
+  window.renderFog?.(fogRevealed, ROLE === "dm");
+  window.updateTokenFogVisibility?.();
 });
 
 socket.on("token_moved", (data) => {
@@ -242,6 +261,8 @@ socket.on("map_resized", (data) => {
   for (const token of Object.values(sessionTokens)) {
     addTokenToMap(token);
   }
+  window.renderFog?.(fogRevealed, ROLE === "dm");
+  window.updateTokenFogVisibility?.();
 });
 
 socket.on("map_image_updated", (data) => {
@@ -772,6 +793,15 @@ function loadMapProfile(id) {
 
 function deleteMapProfile(id) {
   socket.emit("delete_map_profile", { id });
+}
+
+function fogRevealAll() {
+  socket.emit("fog_reset", { mode: "all_revealed" });
+}
+
+function fogResetAll() {
+  if (!confirm("Fog the entire map?")) return;
+  socket.emit("fog_reset", { mode: "all_fogged" });
 }
 
 function showMapImageError(msg) {

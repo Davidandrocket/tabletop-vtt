@@ -2,7 +2,7 @@
 
 const GRID = 50; // px per cell
 
-let stage, imageLayer, gridLayer, tokenLayer, selectionLayer, rulerLayer, pingLayer, spellLayer;
+let stage, imageLayer, gridLayer, fogLayer, tokenLayer, selectionLayer, rulerLayer, pingLayer, spellLayer;
 let selectedTokenId = null;          // primary selected token (single-click or HP editor)
 let selectedTokenIds = new Set();    // all currently selected tokens
 const tokenNodes = {}; // token_id -> Konva.Group
@@ -32,6 +32,10 @@ let spellShapeColor = "#e74c3c";
 let selectedSpellId = null;
 let spellHandleNode = null;
 let spellResizeLabel = null;
+// Fog of war paint state
+let fogMode = null;      // null | "reveal" | "hide"
+let fogDragStart = null;
+let fogDragRect = null;
 
 function initMap(cols, rows) {
   currentCols = cols;
@@ -48,6 +52,8 @@ function initMap(cols, rows) {
     spellHandleNode = null;
     selectedTokenId = null;
     mapImageNode = null;
+    fogDragStart = null;
+    fogDragRect = null;
   }
 
   const W = container.clientWidth || 800;
@@ -64,6 +70,7 @@ function initMap(cols, rows) {
   gridLayer = new Konva.Layer();
   spellLayer = new Konva.Layer({ listening: false });
   tokenLayer = new Konva.Layer();
+  fogLayer   = new Konva.Layer({ listening: false });
   selectionLayer = new Konva.Layer({ listening: false });
   rulerLayer     = new Konva.Layer({ listening: false });
   pingLayer      = new Konva.Layer({ listening: false });
@@ -71,6 +78,7 @@ function initMap(cols, rows) {
   stage.add(gridLayer);
   stage.add(spellLayer);
   stage.add(tokenLayer);
+  stage.add(fogLayer);
   stage.add(selectionLayer);
   stage.add(rulerLayer);
   stage.add(pingLayer);
@@ -210,6 +218,48 @@ function initMap(cols, rows) {
     if (shapeData) window.socketEmit("add_spell_shape", shapeData);
     spellDraftStart = null;
     spellLayer.batchDraw();
+  });
+
+  // Fog of war: click-drag rectangle to reveal or hide cells
+  stage.on("mousedown.fog touchstart.fog", () => {
+    if (!fogMode) return;
+    fogDragStart = stagePointerToCell();
+  });
+  stage.on("mousemove.fog touchmove.fog", () => {
+    if (!fogMode || !fogDragStart) return;
+    const cur = stagePointerToCell();
+    const x1 = Math.min(fogDragStart.col, cur.col);
+    const y1 = Math.min(fogDragStart.row, cur.row);
+    const x2 = Math.max(fogDragStart.col, cur.col);
+    const y2 = Math.max(fogDragStart.row, cur.row);
+    if (fogDragRect) fogDragRect.destroy();
+    fogDragRect = new Konva.Rect({
+      x: x1 * GRID, y: y1 * GRID,
+      width: (x2 - x1 + 1) * GRID, height: (y2 - y1 + 1) * GRID,
+      fill: fogMode === "reveal" ? "rgba(78,204,163,0.25)" : "rgba(255,100,100,0.25)",
+      stroke: fogMode === "reveal" ? "#4ECCA3" : "#ff6464",
+      strokeWidth: 1.5, dash: [6, 3],
+    });
+    selectionLayer.add(fogDragRect);
+    selectionLayer.batchDraw();
+  });
+  stage.on("mouseup.fog touchend.fog", () => {
+    if (!fogMode || !fogDragStart) return;
+    const cur = stagePointerToCell();
+    if (fogDragRect) { fogDragRect.destroy(); fogDragRect = null; }
+    selectionLayer.batchDraw();
+    const c1 = Math.min(fogDragStart.col, cur.col);
+    const r1 = Math.min(fogDragStart.row, cur.row);
+    const c2 = Math.max(fogDragStart.col, cur.col);
+    const r2 = Math.max(fogDragStart.row, cur.row);
+    fogDragStart = null;
+    const cells = [];
+    for (let r = r1; r <= r2; r++) {
+      for (let c = c1; c <= c2; c++) {
+        cells.push([c, r]);
+      }
+    }
+    window.socketEmit("fog_paint", { cells, mode: fogMode });
   });
 
   // Handle resize
@@ -453,6 +503,11 @@ function addTokenToMap(token) {
 
   if (token.hidden) group.opacity(0.4);
 
+  // Hide token on fogged cells for players
+  if (document.body.dataset.role !== "dm" && window.fogRevealed) {
+    group.visible(window.fogRevealed.has(`${token.x},${token.y}`));
+  }
+
   renderConditionIcons(group, token, radius);
   tokenNodes[token.id] = group;
   tokenLayer.add(group);
@@ -503,6 +558,11 @@ function updateTokenOnMap(token) {
   if (bodyFill) bodyFill.fill(token.color || "#e74c3c");
 
   group.opacity(token.hidden ? 0.4 : 1);
+
+  // Hide token on fogged cells for players
+  if (document.body.dataset.role !== "dm" && window.fogRevealed) {
+    group.visible(window.fogRevealed.has(`${token.x},${token.y}`));
+  }
 
   renderConditionIcons(group, token, radius);
   tokenLayer.batchDraw();
@@ -1270,3 +1330,54 @@ function renderConditionIcons(group, token, radius) {
     loadConditionImage("exhaustion").then(img => { if (img) placeIcon(img, -(COND_SIZE / 2), y); });
   }
 }
+
+// --- Fog of War ---
+
+function renderFog(fogSet, isDM) {
+  if (!fogLayer) return;
+  fogLayer.destroyChildren();
+  const fill = isDM ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,1)";
+  for (let r = 0; r < currentRows; r++) {
+    for (let c = 0; c < currentCols; c++) {
+      if (!fogSet.has(`${c},${r}`)) {
+        fogLayer.add(new Konva.Rect({
+          x: c * GRID, y: r * GRID,
+          width: GRID, height: GRID,
+          fill,
+          listening: false,
+        }));
+      }
+    }
+  }
+  fogLayer.batchDraw();
+}
+window.renderFog = renderFog;
+
+function updateTokenFogVisibility() {
+  const isDM = document.body.dataset.role === "dm";
+  if (isDM) return;
+  const fogSet = window.fogRevealed;
+  if (!fogSet) return;
+  for (const [tid, grp] of Object.entries(tokenNodes)) {
+    const tok = window.getToken(tid);
+    if (!tok) continue;
+    grp.visible(fogSet.has(`${tok.x},${tok.y}`));
+  }
+  tokenLayer.batchDraw();
+}
+window.updateTokenFogVisibility = updateTokenFogVisibility;
+
+function toggleFogMode(mode) {
+  fogMode = fogMode === mode ? null : mode;
+  const isActive = fogMode !== null;
+  stage.draggable(!isActive && !rulerActive && !selectionActive && !spellActive);
+  setToolActive(isActive || rulerActive || pingActive || spellActive);
+  document.getElementById("fog-reveal-btn")?.classList.toggle("active", fogMode === "reveal");
+  document.getElementById("fog-hide-btn")?.classList.toggle("active", fogMode === "hide");
+  if (!isActive) {
+    fogDragStart = null;
+    if (fogDragRect) { fogDragRect.destroy(); fogDragRect = null; }
+    selectionLayer.batchDraw();
+  }
+}
+window.toggleFogMode = toggleFogMode;

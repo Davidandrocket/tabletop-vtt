@@ -90,6 +90,9 @@ function initMap(cols, rows) {
     drawGrid(cols, rows);
   }
 
+  // Track mouse position for clipboard paste
+  stage.on("mousemove", () => { _lastMouseCell = stagePointerToCell(); });
+
   // Track panning so a pan-end doesn't fire a deselect click
   let stagePanned = false;
   stage.on("dragmove", () => { stagePanned = true; });
@@ -1381,6 +1384,12 @@ function toggleFogMode(mode) {
   }
 }
 window.toggleFogMode = toggleFogMode;
+
+// Track mouse cell for paste operations
+let _lastMouseCell = { col: 0, row: 0 };
+window.getLastMouseCell = () => ({ ..._lastMouseCell });
+window.getSelectedSpellId = () => selectedSpellId;
+window.getSpellData = (id) => spellData[id] ? { ...spellData[id] } : null;
 
 // Convert browser client coordinates to grid cell (accounting for stage pan/zoom)
 window.clientCoordsToCell = (clientX, clientY) => {

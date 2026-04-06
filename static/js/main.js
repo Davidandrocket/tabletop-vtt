@@ -1237,11 +1237,76 @@ if (ROLE === "dm") {
   }
 }
 
+let _clipboard = null; // { type: "tokens", items: [...] } | { type: "spell", shape: {...} }
+
+// Returns the center of a spell shape in grid units
+function _spellCenter(shape) {
+  switch (shape.type) {
+    case "circle": return { col: shape.cx, row: shape.cy };
+    case "square": return { col: shape.x + shape.w / 2, row: shape.y + shape.h / 2 };
+    case "cone":   return { col: shape.ox, row: shape.oy };
+    case "line":   return { col: (shape.x1 + shape.x2) / 2, row: (shape.y1 + shape.y2) / 2 };
+    default:       return { col: 0, row: 0 };
+  }
+}
+
+// Shift a spell shape so its center lands at (col, row)
+function _shiftSpell(shape, col, row) {
+  const c = _spellCenter(shape);
+  const dc = col - c.col, dr = row - c.row;
+  const s = { ...shape };
+  switch (shape.type) {
+    case "circle": s.cx += dc; s.cy += dr; break;
+    case "square": s.x  += dc; s.y  += dr; break;
+    case "cone":   s.ox += dc; s.oy += dr; s.tx += dc; s.ty += dr; break;
+    case "line":   s.x1 += dc; s.y1 += dr; s.x2 += dc; s.y2 += dr; break;
+  }
+  return s;
+}
+
 document.addEventListener("keydown", (e) => {
   // Don't fire shortcuts when typing in an input
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
   if (e.key === "Home") resetMapView();
   if ((e.key === "Delete" || e.key === "Backspace") && ROLE === "dm") removeSelected();
+
+  // Copy: Ctrl+C
+  if (e.ctrlKey && e.key.toLowerCase() === "c") {
+    const tokenIds = window.getSelectedTokenIds?.();
+    const spellId  = window.getSelectedSpellId?.();
+    if (ROLE === "dm" && tokenIds && tokenIds.size > 0) {
+      _clipboard = { type: "tokens", items: [...tokenIds].map(id => ({ ...sessionTokens[id] })).filter(t => t?.id) };
+      e.preventDefault();
+    } else if (spellId) {
+      const shape = window.getSpellData?.(spellId);
+      if (shape) { _clipboard = { type: "spell", shape }; e.preventDefault(); }
+    }
+    return;
+  }
+
+  // Paste: Ctrl+V
+  if (e.ctrlKey && e.key.toLowerCase() === "v" && _clipboard) {
+    e.preventDefault();
+    const mouse = window.getLastMouseCell?.() ?? { col: 0, row: 0 };
+    if (_clipboard.type === "tokens" && ROLE === "dm") {
+      const minCol = Math.min(..._clipboard.items.map(t => t.x));
+      const minRow = Math.min(..._clipboard.items.map(t => t.y));
+      for (const t of _clipboard.items) {
+        socket.emit("add_token", {
+          name: t.name, color: t.color, image_url: t.image_url,
+          hp: t.hp, max_hp: t.max_hp,
+          x: mouse.col + (t.x - minCol),
+          y: mouse.row + (t.y - minRow),
+          size: t.size, show_hp: t.show_hp, initiative_mod: t.initiative_mod,
+        });
+      }
+    } else if (_clipboard.type === "spell") {
+      const shifted = _shiftSpell(_clipboard.shape, mouse.col, mouse.row);
+      delete shifted.id; // let server assign a fresh id
+      window.socketEmit("add_spell_shape", shifted);
+    }
+    return;
+  }
 
   // Move selected token with WASD / arrow keys
   const moveKeys = {

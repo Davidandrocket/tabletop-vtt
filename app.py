@@ -596,6 +596,8 @@ def on_add_token(data):
         player_id=_resolve_player_id(data.get("player_id"), sess),
         image_url=data.get("image_url") or None,
         size=max(1, min(4, int(data.get("size", 1)))),
+        show_hp=bool(data["show_hp"]) if "show_hp" in data else None,
+        initiative_mod=int(data.get("initiative_mod", 0)),
     )
     sess["tokens"][token["id"]] = token
     db_upsert_token(token, code)

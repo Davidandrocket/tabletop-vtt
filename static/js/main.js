@@ -1274,8 +1274,8 @@ document.addEventListener("keydown", (e) => {
   if (e.ctrlKey && e.key.toLowerCase() === "c") {
     const tokenIds = window.getSelectedTokenIds?.();
     const spellId  = window.getSelectedSpellId?.();
-    if (ROLE === "dm" && tokenIds && tokenIds.size > 0) {
-      _clipboard = { type: "tokens", items: [...tokenIds].map(id => ({ ...sessionTokens[id] })).filter(t => t?.id) };
+    if (ROLE === "dm" && tokenIds && tokenIds.length > 0) {
+      _clipboard = { type: "tokens", items: tokenIds.map(id => ({ ...sessionTokens[id] })).filter(t => t?.id) };
       e.preventDefault();
     } else if (spellId) {
       const shape = window.getSpellData?.(spellId);

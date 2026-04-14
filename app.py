@@ -1779,6 +1779,38 @@ def parse_dnd_beyond_character(data, character_id):
         "performance": "charisma", "persuasion": "charisma",
     }
 
+    # D&DBeyond skill entity IDs (valueTypeId: "1958004211") -> our key
+    # Used for characterValues manual proficiency overrides
+    SKILL_ENTITY_ID_MAP = {
+        1:  "acrobatics",
+        2:  "athletics",
+        3:  "animalHandling",
+        4:  "sleightOfHand",
+        5:  "stealth",
+        6:  "arcana",
+        7:  "history",
+        8:  "investigation",
+        9:  "nature",
+        10: "religion",
+        11: "insight",
+        12: "medicine",
+        13: "perception",
+        14: "survival",
+        15: "deception",
+        16: "intimidation",
+        17: "performance",
+        18: "persuasion",
+    }
+    # Ability score stat IDs (valueTypeId: "1472902489") -> ability name
+    ABILITY_ENTITY_ID_MAP = {
+        1: "strength",
+        2: "dexterity",
+        3: "constitution",
+        4: "intelligence",
+        5: "wisdom",
+        6: "charisma",
+    }
+
     skill_prof = {}  # our_key -> 0, 1 (proficient), 2 (expertise)
     for m in all_mods:
         sub = m.get("subType", "")
@@ -1792,6 +1824,58 @@ def parse_dnd_beyond_character(data, character_id):
             skill_prof[our_key] = 1
         elif mtype == "half-proficiency" and skill_prof.get(our_key, 0) < 1:
             skill_prof[our_key] = -1  # half prof flag
+
+    # --- Saving throws (from modifiers) ---
+    SAVE_SUBTYPES = {
+        "strength-saving-throws":     "strength",
+        "dexterity-saving-throws":    "dexterity",
+        "constitution-saving-throws": "constitution",
+        "intelligence-saving-throws": "intelligence",
+        "wisdom-saving-throws":       "wisdom",
+        "charisma-saving-throws":     "charisma",
+    }
+    save_prof = set()
+    for m in all_mods:
+        if m.get("type") == "proficiency":
+            ab = SAVE_SUBTYPES.get(m.get("subType", ""))
+            if ab:
+                save_prof.add(ab)
+
+    # --- Apply characterValues manual proficiency overrides ---
+    # typeId 26 = skill proficiency override (valueTypeId "1958004211")
+    # typeId 41 = saving throw proficiency override (valueTypeId "1472902489")
+    # value >= 3 → grant proficiency, value == 1 → explicitly remove proficiency
+    for cv in (char.get("characterValues") or []):
+        type_id  = cv.get("typeId")
+        val      = cv.get("value")
+        eid      = cv.get("valueId")  # comes as int or string
+        if eid is not None:
+            try:
+                eid = int(eid)
+            except (TypeError, ValueError):
+                eid = None
+        if eid is None:
+            continue
+
+        if type_id == 26:  # skill override
+            our_key = SKILL_ENTITY_ID_MAP.get(eid)
+            if our_key:
+                if val is not None and val >= 3:
+                    if skill_prof.get(our_key, 0) < 1:
+                        skill_prof[our_key] = 1
+                elif val == 1:
+                    # Explicitly not proficient — only remove if currently at 1
+                    # (preserve expertise if somehow granted)
+                    if skill_prof.get(our_key, 0) == 1:
+                        skill_prof[our_key] = 0
+
+        elif type_id == 41:  # saving throw override
+            ab_name = ABILITY_ENTITY_ID_MAP.get(eid)
+            if ab_name:
+                if val is not None and val >= 3:
+                    save_prof.add(ab_name)
+                elif val == 1:
+                    save_prof.discard(ab_name)
 
     skills = {}
     for ddb_sub, our_key in SKILL_MAP.items():
@@ -1810,22 +1894,6 @@ def parse_dnd_beyond_character(data, character_id):
             value = ab_mod
             prof_num = 0
         skills[our_key] = {"value": value, "proficiency": prof_num}
-
-    # --- Saving throws ---
-    SAVE_SUBTYPES = {
-        "strength-saving-throws":     "strength",
-        "dexterity-saving-throws":    "dexterity",
-        "constitution-saving-throws": "constitution",
-        "intelligence-saving-throws": "intelligence",
-        "wisdom-saving-throws":       "wisdom",
-        "charisma-saving-throws":     "charisma",
-    }
-    save_prof = set()
-    for m in all_mods:
-        if m.get("type") == "proficiency":
-            ab = SAVE_SUBTYPES.get(m.get("subType", ""))
-            if ab:
-                save_prof.add(ab)
 
     saves = {}
     for ab_name, ab_data in abilities.items():

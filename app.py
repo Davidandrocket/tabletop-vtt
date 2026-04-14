@@ -1692,19 +1692,37 @@ def parse_dnd_beyond_character(data, character_id):
     name = char.get("name", "Unknown")
     avatar = (char.get("decorations") or {}).get("avatarUrl") or char.get("avatarUrl")
 
+    # --- Modifiers (computed first — needed for stat bonuses) ---
+    all_mods = _ddb_all_modifiers(char)
+
     # --- Stats ---
     # id: 1=STR 2=DEX 3=CON 4=INT 5=WIS 6=CHA
+    # stats.value = base allocated score (before racial/feat bonuses)
+    # Racial, background, and feat stat bonuses live in modifiers as
+    # type="bonus", subType="{ability}-score" and must be added here.
     STAT_IDS = {1: "strength", 2: "dexterity", 3: "constitution",
                 4: "intelligence", 5: "wisdom", 6: "charisma"}
+    STAT_SCORE_SUBTYPES = {
+        "strength-score": 1, "dexterity-score": 2, "constitution-score": 3,
+        "intelligence-score": 4, "wisdom-score": 5, "charisma-score": 6,
+    }
 
-    raw   = {s["id"]: (s.get("value") or 10) for s in (char.get("stats") or [])}
-    bonus = {s["id"]: (s.get("value") or 0)  for s in (char.get("bonusStats") or [])}
-    override = {s["id"]: s.get("value")       for s in (char.get("overrideStats") or [])}
+    raw      = {s["id"]: (s.get("value") or 10) for s in (char.get("stats") or [])}
+    bonus_st = {s["id"]: (s.get("value") or 0)  for s in (char.get("bonusStats") or [])}
+    override = {s["id"]: s.get("value")          for s in (char.get("overrideStats") or [])}
+
+    # Sum explicitly named stat bonuses from modifiers (racial +2 DEX, etc.)
+    mod_stat_bonus = {sid: 0 for sid in STAT_IDS}
+    for m in all_mods:
+        if m.get("type") == "bonus":
+            sid = STAT_SCORE_SUBTYPES.get(m.get("subType", ""))
+            if sid:
+                mod_stat_bonus[sid] += m.get("value") or 0
 
     def get_stat(sid):
         if override.get(sid) is not None:
             return override[sid]
-        return raw.get(sid, 10) + bonus.get(sid, 0)
+        return raw.get(sid, 10) + bonus_st.get(sid, 0) + mod_stat_bonus.get(sid, 0)
 
     def mod(score):
         return (score - 10) // 2
@@ -1727,9 +1745,6 @@ def parse_dnd_beyond_character(data, character_id):
     if total_level < 1:
         total_level = 1
     prof_bonus = (total_level - 1) // 4 + 2
-
-    # --- Modifiers ---
-    all_mods = _ddb_all_modifiers(char)
 
     # --- Skill proficiencies ---
     # D&DBeyond uses hyphenated lowercase subType names
@@ -1835,27 +1850,31 @@ def parse_dnd_beyond_character(data, character_id):
             init_bonus += m.get("value") or 0
 
     # --- Spell slots ---
+    # In D&DBeyond API: available = remaining slots, used = slots spent,
+    # total = used + available (NOT just available).
     spell_slots = []
     for slot in (char.get("spellSlots") or []):
         level     = slot.get("level", 0)
-        available = slot.get("available", slot.get("max", 0)) or 0
+        available = slot.get("available", 0) or 0
         used      = slot.get("used", 0) or 0
-        if available > 0:
+        total     = used + available
+        if total > 0:
             spell_slots.append({
                 "name": f"Level {level}",
-                "value": max(0, available - used),
-                "total": available,
+                "value": available,
+                "total": total,
                 "variableName": f"spellSlot{level}",
             })
     for slot in (char.get("pactMagic") or []):
         level     = slot.get("level", 0)
-        available = slot.get("available", slot.get("max", 0)) or 0
+        available = slot.get("available", 0) or 0
         used      = slot.get("used", 0) or 0
-        if available > 0:
+        total     = used + available
+        if total > 0:
             spell_slots.append({
                 "name": f"Pact Level {level}",
-                "value": max(0, available - used),
-                "total": available,
+                "value": available,
+                "total": total,
                 "variableName": f"pactSlot{level}",
             })
 

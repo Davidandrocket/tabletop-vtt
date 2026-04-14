@@ -1359,18 +1359,32 @@ def on_refresh_character(data=None):
         emit("dicecloud_error", {"message": "No character loaded yet — use the login form first."})
         return
     dc_token = char_entry.get("dicecloud_token")
-    if not dc_token:
-        emit("dicecloud_error", {"message": "DiceCloud session expired — please re-enter your credentials."})
-        return
+    ddb_id = char_entry.get("ddb_id")
 
     try:
-        char_resp = requests.get(
-            f"{DICECLOUD_BASE}/creature/{character_id}",
-            headers={"Authorization": f"Bearer {dc_token}"},
-            timeout=15,
-        )
-        char_resp.raise_for_status()
-        parsed = parse_character(char_resp.json(), character_id)
+        if ddb_id:
+            resp = requests.get(
+                f"https://character-service.dndbeyond.com/character/v5/character/{ddb_id}",
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            char_json = resp.json()
+            if not char_json.get("success"):
+                emit("dicecloud_error", {"message": "Character not found or not set to public."})
+                return
+            parsed = parse_dnd_beyond_character(char_json, ddb_id)
+        elif dc_token:
+            char_resp = requests.get(
+                f"{DICECLOUD_BASE}/creature/{character_id}",
+                headers={"Authorization": f"Bearer {dc_token}"},
+                timeout=15,
+            )
+            char_resp.raise_for_status()
+            parsed = parse_character(char_resp.json(), character_id)
+        else:
+            emit("dicecloud_error", {"message": "DiceCloud session expired — please re-enter your credentials."})
+            return
 
         char_entry["character_data"] = parsed
         parsed["player_name"] = info["name"]
@@ -1401,6 +1415,74 @@ def on_refresh_character(data=None):
             emit("dicecloud_error", {"message": "DiceCloud session expired — please re-enter your credentials."})
         else:
             emit("dicecloud_error", {"message": f"DiceCloud error: {e.response.status_code}"})
+    except Exception as e:
+        emit("dicecloud_error", {"message": str(e)})
+
+
+@socketio.on("dndbeyond_import")
+def on_dndbeyond_import(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "player":
+        return
+
+    ddb_id = str(data.get("character_id", "")).strip()
+    if not ddb_id or not ddb_id.isdigit():
+        emit("dicecloud_error", {"message": "D&D Beyond character ID must be a number."})
+        return
+
+    char_key = f"ddb:{ddb_id}"
+    try:
+        resp = requests.get(
+            f"https://character-service.dndbeyond.com/character/v5/character/{ddb_id}",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        char_json = resp.json()
+
+        if not char_json.get("success"):
+            emit("dicecloud_error", {"message": "Character not found or not set to public."})
+            return
+
+        parsed = parse_dnd_beyond_character(char_json, ddb_id)
+
+        code = info["code"]
+        sess = sessions[code]
+        if request.sid in sess["players"]:
+            sess["players"][request.sid]["characters"][char_key] = {
+                "dicecloud_token": None,
+                "ddb_id": ddb_id,
+                "character_data": parsed,
+            }
+
+        parsed["player_name"] = info["name"]
+        emit("character_loaded", {"character_id": char_key, "character": parsed})
+
+        player_uuid = info.get("player_uuid")
+        if player_uuid:
+            db_save_character(code, player_uuid, char_key, parsed)
+            dm_socket = sess.get("dm_socket")
+            if dm_socket:
+                emit("character_shared", {
+                    "player_uuid": player_uuid,
+                    "player_sid": request.sid,
+                    "character_id": char_key,
+                    "character": parsed,
+                }, room=dm_socket)
+
+        for t in sess["tokens"].values():
+            if t.get("player_id") == player_uuid and t.get("name", "").lower() == parsed["name"].lower():
+                t["max_hp"] = parsed["hp"]["max"]
+                t["hp"] = min(t["hp"], parsed["hp"]["max"])
+                db_upsert_token(t, code)
+                emit("token_updated", t, room=code)
+                break
+
+    except requests.HTTPError as e:
+        if e.response.status_code == 404:
+            emit("dicecloud_error", {"message": "Character not found. Make sure the character is set to public on D&D Beyond."})
+        else:
+            emit("dicecloud_error", {"message": f"D&D Beyond error: {e.response.status_code}"})
     except Exception as e:
         emit("dicecloud_error", {"message": str(e)})
 
@@ -1532,6 +1614,275 @@ def parse_character(data, character_id):
         "class_levels": class_levels,
         "proficiency_bonus": variables.get("proficiencyBonus", {}).get("value", 2),
         "death_saves": creature.get("deathSave", {}),
+    }
+
+
+def _ddb_all_modifiers(char):
+    """Flatten all D&DBeyond modifier lists into one list (excludes item modifiers)."""
+    mods = []
+    for source_list in (char.get("modifiers") or {}).values():
+        mods.extend(source_list or [])
+    return mods
+
+
+def _ddb_compute_ac(char, dex_mod, all_mods):
+    """Estimate AC from equipped inventory + modifiers."""
+    has_shield = False
+    armor_ac = None
+
+    for item in (char.get("inventory") or []):
+        if not item.get("equipped"):
+            continue
+        defn = item.get("definition") or {}
+        if defn.get("filterType") != "Armor":
+            continue
+        armor_type_str = (defn.get("type") or "").lower()
+        base_ac = defn.get("armorClass") or 10
+        if "shield" in armor_type_str:
+            has_shield = True
+        elif "heavy" in armor_type_str:
+            armor_ac = base_ac
+        elif "medium" in armor_type_str:
+            armor_ac = base_ac + min(dex_mod, 2)
+        elif "light" in armor_type_str:
+            armor_ac = base_ac + dex_mod
+
+    if armor_ac is None:
+        armor_ac = 10 + dex_mod  # unarmored default
+
+    # AC bonuses (magic items, spells, etc.)
+    ac_bonus = 0
+    for mod in all_mods:
+        if mod.get("type") == "bonus" and mod.get("subType") == "armor-class":
+            ac_bonus += mod.get("value") or 0
+    # Magic armor bonuses from equipped items
+    for item in (char.get("inventory") or []):
+        if not item.get("equipped"):
+            continue
+        defn = item.get("definition") or {}
+        if defn.get("filterType") == "Armor":
+            armor_type_str = (defn.get("type") or "").lower()
+            if "shield" not in armor_type_str:
+                ac_bonus += defn.get("magic") or 0
+
+    return max(1, armor_ac + (2 if has_shield else 0) + ac_bonus)
+
+
+def _ddb_compute_speed(char, all_mods):
+    """Get walking speed from race data + modifiers."""
+    race = char.get("race") or {}
+    weight_speeds = race.get("weightSpeeds") or {}
+    base_speed = (weight_speeds.get("normal") or {}).get("walk") or 30
+
+    for mod in all_mods:
+        if mod.get("type") == "set" and mod.get("subType") == "speed":
+            base_speed = mod.get("value") or base_speed
+    for mod in all_mods:
+        if mod.get("type") == "bonus" and mod.get("subType") == "speed":
+            base_speed += mod.get("value") or 0
+
+    return base_speed
+
+
+def parse_dnd_beyond_character(data, character_id):
+    """Parse D&DBeyond character API (v5) response into our standard format."""
+    # Top-level response wraps actual character in "data"
+    char = data.get("data") or data
+
+    name = char.get("name", "Unknown")
+    avatar = (char.get("decorations") or {}).get("avatarUrl") or char.get("avatarUrl")
+
+    # --- Stats ---
+    # id: 1=STR 2=DEX 3=CON 4=INT 5=WIS 6=CHA
+    STAT_IDS = {1: "strength", 2: "dexterity", 3: "constitution",
+                4: "intelligence", 5: "wisdom", 6: "charisma"}
+
+    raw   = {s["id"]: (s.get("value") or 10) for s in (char.get("stats") or [])}
+    bonus = {s["id"]: (s.get("value") or 0)  for s in (char.get("bonusStats") or [])}
+    override = {s["id"]: s.get("value")       for s in (char.get("overrideStats") or [])}
+
+    def get_stat(sid):
+        if override.get(sid) is not None:
+            return override[sid]
+        return raw.get(sid, 10) + bonus.get(sid, 0)
+
+    def mod(score):
+        return (score - 10) // 2
+
+    abilities = {}
+    for sid, ab in STAT_IDS.items():
+        score = get_stat(sid)
+        abilities[ab] = {"score": score, "modifier": mod(score)}
+
+    dex_mod = abilities["dexterity"]["modifier"]
+
+    # --- Class levels & total level ---
+    class_levels = []
+    total_level = 0
+    for cls in (char.get("classes") or []):
+        level = cls.get("level", 1)
+        cls_name = (cls.get("definition") or {}).get("name", "Unknown")
+        class_levels.append({"name": cls_name, "level": level})
+        total_level += level
+    if total_level < 1:
+        total_level = 1
+    prof_bonus = (total_level - 1) // 4 + 2
+
+    # --- Modifiers ---
+    all_mods = _ddb_all_modifiers(char)
+
+    # --- Skill proficiencies ---
+    # D&DBeyond uses hyphenated lowercase subType names
+    SKILL_MAP = {
+        "athletics":         "athletics",
+        "acrobatics":        "acrobatics",
+        "sleight-of-hand":   "sleightOfHand",
+        "stealth":           "stealth",
+        "arcana":            "arcana",
+        "history":           "history",
+        "investigation":     "investigation",
+        "nature":            "nature",
+        "religion":          "religion",
+        "animal-handling":   "animalHandling",
+        "insight":           "insight",
+        "medicine":          "medicine",
+        "perception":        "perception",
+        "survival":          "survival",
+        "deception":         "deception",
+        "intimidation":      "intimidation",
+        "performance":       "performance",
+        "persuasion":        "persuasion",
+    }
+    SKILL_ABILITY = {
+        "athletics": "strength",
+        "acrobatics": "dexterity", "sleightOfHand": "dexterity", "stealth": "dexterity",
+        "arcana": "intelligence", "history": "intelligence", "investigation": "intelligence",
+        "nature": "intelligence", "religion": "intelligence",
+        "animalHandling": "wisdom", "insight": "wisdom", "medicine": "wisdom",
+        "perception": "wisdom", "survival": "wisdom",
+        "deception": "charisma", "intimidation": "charisma",
+        "performance": "charisma", "persuasion": "charisma",
+    }
+
+    skill_prof = {}  # our_key -> 0, 1 (proficient), 2 (expertise)
+    for m in all_mods:
+        sub = m.get("subType", "")
+        our_key = SKILL_MAP.get(sub)
+        if not our_key:
+            continue
+        mtype = m.get("type", "")
+        if mtype == "expertise":
+            skill_prof[our_key] = 2
+        elif mtype == "proficiency" and skill_prof.get(our_key, 0) < 2:
+            skill_prof[our_key] = 1
+        elif mtype == "half-proficiency" and skill_prof.get(our_key, 0) < 1:
+            skill_prof[our_key] = -1  # half prof flag
+
+    skills = {}
+    for ddb_sub, our_key in SKILL_MAP.items():
+        ab_mod = abilities[SKILL_ABILITY[our_key]]["modifier"]
+        plevel = skill_prof.get(our_key, 0)
+        if plevel == 2:
+            value = ab_mod + prof_bonus * 2
+            prof_num = 2
+        elif plevel == 1:
+            value = ab_mod + prof_bonus
+            prof_num = 1
+        elif plevel == -1:
+            value = ab_mod + prof_bonus // 2
+            prof_num = 0  # not shown as proficient dot
+        else:
+            value = ab_mod
+            prof_num = 0
+        skills[our_key] = {"value": value, "proficiency": prof_num}
+
+    # --- Saving throws ---
+    SAVE_SUBTYPES = {
+        "strength-saving-throws":     "strength",
+        "dexterity-saving-throws":    "dexterity",
+        "constitution-saving-throws": "constitution",
+        "intelligence-saving-throws": "intelligence",
+        "wisdom-saving-throws":       "wisdom",
+        "charisma-saving-throws":     "charisma",
+    }
+    save_prof = set()
+    for m in all_mods:
+        if m.get("type") == "proficiency":
+            ab = SAVE_SUBTYPES.get(m.get("subType", ""))
+            if ab:
+                save_prof.add(ab)
+
+    saves = {}
+    for ab_name, ab_data in abilities.items():
+        has_prof = ab_name in save_prof
+        value = ab_data["modifier"] + (prof_bonus if has_prof else 0)
+        saves[ab_name] = {"value": value, "proficiency": 1 if has_prof else 0}
+
+    # --- HP ---
+    hp_max = char.get("overrideHitPoints") or (
+        (char.get("baseHitPoints") or 0) + (char.get("bonusHitPoints") or 0)
+    )
+    hp_removed = char.get("removedHitPoints") or 0
+    hp_temp    = char.get("temporaryHitPoints") or 0
+    hp_current = max(0, hp_max - hp_removed)
+
+    # --- AC, Speed, Initiative ---
+    ac = _ddb_compute_ac(char, dex_mod, all_mods)
+    speed = _ddb_compute_speed(char, all_mods)
+    init_bonus = dex_mod
+    for m in all_mods:
+        if m.get("type") == "bonus" and m.get("subType") == "initiative":
+            init_bonus += m.get("value") or 0
+
+    # --- Spell slots ---
+    spell_slots = []
+    for slot in (char.get("spellSlots") or []):
+        level     = slot.get("level", 0)
+        available = slot.get("available", slot.get("max", 0)) or 0
+        used      = slot.get("used", 0) or 0
+        if available > 0:
+            spell_slots.append({
+                "name": f"Level {level}",
+                "value": max(0, available - used),
+                "total": available,
+                "variableName": f"spellSlot{level}",
+            })
+    for slot in (char.get("pactMagic") or []):
+        level     = slot.get("level", 0)
+        available = slot.get("available", slot.get("max", 0)) or 0
+        used      = slot.get("used", 0) or 0
+        if available > 0:
+            spell_slots.append({
+                "name": f"Pact Level {level}",
+                "value": max(0, available - used),
+                "total": available,
+                "variableName": f"pactSlot{level}",
+            })
+
+    # --- Conditions (active status effects from condition modifiers) ---
+    conditions = []
+    for m in (char.get("modifiers") or {}).get("condition", []):
+        label = m.get("friendlySubTypeName") or m.get("subType", "")
+        if label:
+            conditions.append(label)
+
+    return {
+        "id": str(character_id),
+        "name": name,
+        "avatar": avatar,
+        "hp": {"current": hp_current, "max": hp_max, "temp": hp_temp},
+        "ac": ac,
+        "speed": speed,
+        "initiative_bonus": init_bonus,
+        "abilities": abilities,
+        "skills": skills,
+        "saves": saves,
+        "resources": [],
+        "spell_slots": spell_slots,
+        "conditions": conditions,
+        "class_levels": class_levels,
+        "proficiency_bonus": prof_bonus,
+        "death_saves": {},
     }
 
 

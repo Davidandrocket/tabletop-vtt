@@ -51,14 +51,24 @@
         </div>
         {% endif %}
 
-        <!-- Dicecloud login (players only) -->
+        <!-- Character import (players only) -->
         {% if role == 'player' %}
         <div id="dc-login-section">
-          <h3>Load from DiceCloud</h3>
-          <input id="dc-username" type="text" placeholder="Username" autocomplete="username">
-          <input id="dc-password" type="password" placeholder="Password" autocomplete="current-password">
-          <input id="dc-char-id" type="text" placeholder="Character ID (from URL)">
-          <button class="btn-primary" onclick="dcLogin()">Load Character</button>
+          <div class="import-tabs">
+            <button class="import-tab active" id="tab-dicecloud" onclick="switchImportTab('dicecloud')">DiceCloud</button>
+            <button class="import-tab" id="tab-dndbeyond" onclick="switchImportTab('dndbeyond')">D&amp;D Beyond</button>
+          </div>
+          <div id="import-dicecloud">
+            <input id="dc-username" type="text" placeholder="Username" autocomplete="username">
+            <input id="dc-password" type="password" placeholder="Password" autocomplete="current-password">
+            <input id="dc-char-id" type="text" placeholder="Character ID (from URL)">
+            <button class="btn-primary" onclick="dcLogin()">Load Character</button>
+          </div>
+          <div id="import-dndbeyond" class="hidden">
+            <p class="import-hint">Character must be set to <strong>public</strong> on D&amp;D Beyond.</p>
+            <input id="ddb-char-id" type="text" placeholder="Character ID (from URL)" inputmode="numeric">
+            <button class="btn-primary" onclick="dndbeyondImport()">Import Character</button>
+          </div>
           <div id="dc-error" class="error-text hidden"></div>
         </div>
         {% endif %}

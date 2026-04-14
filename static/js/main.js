@@ -671,6 +671,14 @@ function resetRefreshBtn() {
   if (btn) { btn.disabled = false; btn.textContent = "↻ Update"; }
 }
 
+function switchImportTab(tab) {
+  document.getElementById("import-dicecloud").classList.toggle("hidden", tab !== "dicecloud");
+  document.getElementById("import-dndbeyond").classList.toggle("hidden", tab !== "dndbeyond");
+  document.getElementById("tab-dicecloud").classList.toggle("active", tab === "dicecloud");
+  document.getElementById("tab-dndbeyond").classList.toggle("active", tab === "dndbeyond");
+  document.getElementById("dc-error").classList.add("hidden");
+}
+
 function dcLogin() {
   const username = document.getElementById("dc-username").value.trim();
   const password = document.getElementById("dc-password").value;
@@ -685,6 +693,25 @@ function dcLogin() {
 
   errEl.classList.add("hidden");
   socket.emit("dicecloud_login", { username, password, character_id: charId });
+}
+
+function dndbeyondImport() {
+  const charId = document.getElementById("ddb-char-id").value.trim();
+  const errEl = document.getElementById("dc-error");
+
+  if (!charId) {
+    errEl.textContent = "Character ID required.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  if (!/^\d+$/.test(charId)) {
+    errEl.textContent = "Character ID must be a number (found in the D&D Beyond character URL).";
+    errEl.classList.remove("hidden");
+    return;
+  }
+
+  errEl.classList.add("hidden");
+  socket.emit("dndbeyond_import", { character_id: charId });
 }
 
 // --- Map controls (DM) ---

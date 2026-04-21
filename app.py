@@ -419,6 +419,7 @@ def create_session():
     db_save_session(code)
 
     session.setdefault("sessions", {})[code] = {"role": "dm", "name": dm_name}
+    session.modified = True
     return redirect(url_for("vtt", code=code))
 
 

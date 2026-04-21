@@ -1366,7 +1366,56 @@ function togglePanel(panelId) {
 function updatePlayerCount() {
   const count = Object.keys(onlinePlayers).length;
   document.getElementById("player-count").textContent = `${count} online`;
+  if (ROLE === "dm") renderOnlinePlayers();
 }
+
+function renderOnlinePlayers() {
+  const list = document.getElementById("online-players-list");
+  if (!list) return;
+  list.innerHTML = "";
+  const entries = Object.entries(onlinePlayers);
+  if (entries.length === 0) {
+    list.innerHTML = '<div class="party-empty">No players connected.</div>';
+    return;
+  }
+  for (const [sid, player] of entries) {
+    const row = document.createElement("div");
+    row.className = "online-player-row";
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "online-player-name";
+    nameSpan.textContent = player.name;
+    row.appendChild(nameSpan);
+    const btn = document.createElement("button");
+    btn.className = "btn-make-dm";
+    btn.textContent = "Make DM";
+    btn.onclick = () => transferDm(sid, player.name);
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
+}
+
+function transferDm(targetSid, targetName) {
+  if (!confirm(`Transfer DM control to ${targetName}? You will become a regular player.`)) return;
+  socket.emit("transfer_dm", { target_sid: targetSid });
+}
+
+socket.on("dm_transferred", (data) => {
+  const { new_dm_sid, old_dm_sid, new_dm_name, old_dm_name, promo_token, demo_token } = data;
+  const code = document.body.dataset.code;
+
+  if (window.MY_SID === new_dm_sid) {
+    // Claim DM role via server, then reload into full DM view
+    window.location.href = `/session/${code}/accept_role?token=${promo_token}`;
+  } else if (window.MY_SID === old_dm_sid) {
+    // Drop to player role via server, then reload into player view
+    window.location.href = `/session/${code}/accept_role?token=${demo_token}`;
+  } else {
+    // Bystander: new DM leaves player list, old DM appears as player
+    delete onlinePlayers[new_dm_sid];
+    onlinePlayers[old_dm_sid] = { name: old_dm_name, uuid: null };
+    updatePlayerCount();
+  }
+});
 
 // Collapse both panels by default on small screens
 if (window.innerWidth <= 640) {

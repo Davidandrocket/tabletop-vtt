@@ -4,6 +4,8 @@ monkey.patch_all()
 import os
 import json
 import uuid
+import time
+import secrets
 import random
 import string
 import re
@@ -28,6 +30,7 @@ ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 # --- In-memory state (ephemeral per-connection data only) ---
 sessions = {}       # code -> session data
 socket_info = {}    # socket_id -> {code, role, name}
+_role_tokens = {}   # token -> {code, role, name, expires}
 
 
 # --- Database ---
@@ -448,6 +451,20 @@ def vtt(code):
                            name=session["name"])
 
 
+@app.route("/session/<code>/accept_role")
+def accept_role(code):
+    """One-time endpoint for DM transfers — updates Flask session role and redirects."""
+    token = request.args.get("token", "")
+    pending = _role_tokens.pop(token, None)
+    if not pending or pending["code"] != code or time.time() > pending["expires"]:
+        return "Invalid or expired link", 400
+    session["role"] = pending["role"]
+    session["name"] = pending["name"]
+    if pending["role"] == "player" and "player_uuid" not in session:
+        session["player_uuid"] = str(uuid.uuid4())
+    return redirect(url_for("vtt", code=code))
+
+
 @app.route("/session/<code>/upload_map", methods=["POST"])
 def upload_map(code):
     if session.get("role") != "dm" or session.get("code") != code:
@@ -562,7 +579,63 @@ def on_disconnect():
         return
     sess = sessions[code]
     sess["players"].pop(request.sid, None)
+    if sess.get("dm_socket") == request.sid:
+        sess["dm_socket"] = None
     emit("player_left", {"name": info["name"], "sid": request.sid}, room=code)
+
+
+@socketio.on("transfer_dm")
+def on_transfer_dm(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions[code]
+    target_sid = data.get("target_sid")
+    if not target_sid or target_sid not in sess["players"]:
+        return
+
+    target_info = socket_info.get(target_sid)
+    if not target_info or target_info["code"] != code:
+        return
+
+    old_dm_sid = request.sid
+    old_dm_name = info["name"]
+    new_dm_name = target_info["name"]
+
+    # Swap roles in socket_info
+    info["role"] = "player"
+    target_info["role"] = "dm"
+
+    # Old DM becomes a player entry
+    old_dm_uuid = str(uuid.uuid4())
+    info["player_uuid"] = old_dm_uuid
+    sess["players"][old_dm_sid] = {
+        "name": old_dm_name,
+        "player_uuid": old_dm_uuid,
+        "characters": {},
+    }
+
+    # New DM removed from players, becomes dm_socket
+    sess["players"].pop(target_sid, None)
+    sess["dm_socket"] = target_sid
+
+    # One-time tokens so each party can update their Flask session cookie
+    expires = time.time() + 60
+    promo_token = secrets.token_urlsafe(16)
+    demo_token = secrets.token_urlsafe(16)
+    _role_tokens[promo_token] = {"code": code, "role": "dm",     "name": new_dm_name, "expires": expires}
+    _role_tokens[demo_token]  = {"code": code, "role": "player", "name": old_dm_name, "expires": expires}
+
+    # Notify everyone — each client uses their SID to determine which token applies
+    emit("dm_transferred", {
+        "new_dm_sid":    target_sid,
+        "old_dm_sid":    old_dm_sid,
+        "new_dm_name":   new_dm_name,
+        "old_dm_name":   old_dm_name,
+        "promo_token":   promo_token,   # new DM uses this
+        "demo_token":    demo_token,    # old DM uses this
+    }, room=code)
 
 
 # Token management (DM only)

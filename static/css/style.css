@@ -864,6 +864,46 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 .remove-char-btn:hover { opacity: 1; }
 
 /* ── DM Party Panel ── */
+.panel-section-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.online-player-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.online-player-name {
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.btn-make-dm {
+  font-size: 0.72rem;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid var(--accent2);
+  background: transparent;
+  color: var(--accent2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-make-dm:hover {
+  background: var(--accent2);
+  color: #fff;
+}
+
 .party-empty {
   font-size: 0.82rem;
   color: var(--text-dim);

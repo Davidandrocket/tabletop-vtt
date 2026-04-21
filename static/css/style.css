@@ -134,6 +134,39 @@ body.landing {
   font-size: 0.9rem;
 }
 
+.claim-dm-section {
+  margin-top: 28px;
+  text-align: left;
+  max-width: 320px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.claim-dm-toggle {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 0;
+}
+.claim-dm-toggle:hover { color: var(--text); }
+
+.claim-dm-form {
+  margin-top: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+}
+.claim-dm-hint {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+.claim-dm-form input { display: block; }
+.claim-dm-form .btn-primary { width: 100%; margin-top: 4px; }
+
 /* ── VTT layout ── */
 body.vtt { display: flex; flex-direction: column; }
 

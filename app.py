@@ -437,6 +437,35 @@ def join_session():
     return redirect(url_for("vtt", code=code))
 
 
+@app.route("/claim_dm", methods=["POST"])
+def claim_dm():
+    admin_password = os.environ.get("ADMIN_PASSWORD", "")
+    if not admin_password:
+        return render_template("index.html", claim_error="Admin password is not configured on this server.")
+    code = request.form.get("code", "").strip().upper()
+    name = request.form.get("name", "").strip() or "DM"
+    password = request.form.get("password", "")
+    if not ensure_session_loaded(code):
+        return render_template("index.html", claim_error="Session not found.")
+    if password != admin_password:
+        return render_template("index.html", claim_error="Incorrect admin password.")
+    sessions_map = session.setdefault("sessions", {})
+    sessions_map[code] = {"role": "dm", "name": name}
+    session.modified = True
+    # Kick the old DM's socket if one is connected
+    sess = sessions[code]
+    old_dm_sid = sess.get("dm_socket")
+    if old_dm_sid and old_dm_sid in socket_info:
+        old_info = socket_info[old_dm_sid]
+        old_info["role"] = "player"
+        old_uuid = str(uuid.uuid4())
+        old_info["player_uuid"] = old_uuid
+        sess["players"][old_dm_sid] = {"name": old_info["name"], "player_uuid": old_uuid, "characters": {}}
+        emit("role_revoked", {"message": f"DM control was claimed by {name}."}, room=old_dm_sid, namespace="/")
+    sess["dm_socket"] = None  # will be set when new DM connects
+    return redirect(url_for("vtt", code=code))
+
+
 @app.route("/session/<code>")
 def vtt(code):
     if not ensure_session_loaded(code):

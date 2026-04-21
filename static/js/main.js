@@ -302,6 +302,11 @@ socket.on("chat_entry", (msg) => appendChat(msg, true));
 
 // --- Error events ---
 
+socket.on("role_revoked", (data) => {
+  alert(data.message || "Your DM role has been revoked by an admin.");
+  window.location.href = "/";
+});
+
 socket.on("error_msg", (data) => appendSystemMsg(data.message));
 socket.on("dicecloud_error", (data) => {
   const errEl = document.getElementById("dc-error");

@@ -39,6 +39,25 @@
         </form>
       </div>
     </div>
+
+    <div class="claim-dm-section">
+      <button class="claim-dm-toggle" onclick="this.nextElementSibling.classList.toggle('hidden')">
+        ▸ Claim DM (admin)
+      </button>
+      <div class="claim-dm-form hidden">
+        {% if claim_error %}
+        <div class="error-banner" style="margin-bottom:8px;">{{ claim_error }}</div>
+        {% endif %}
+        <p class="claim-dm-hint">Forcibly takes the DM role in an existing session. Requires the server admin password.</p>
+        <form action="/claim_dm" method="post">
+          <input type="text" name="code" placeholder="Session code" maxlength="6"
+                 style="text-transform:uppercase" required>
+          <input type="text" name="name" placeholder="Your name (DM)" maxlength="30" required>
+          <input type="password" name="password" placeholder="Admin password" required>
+          <button type="submit" class="btn-primary">Claim DM</button>
+        </form>
+      </div>
+    </div>
   </div>
 </body>
 </html>

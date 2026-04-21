@@ -48,7 +48,7 @@ let currentCharId = null;   // which character sheet is currently displayed
 
 // --- Socket setup ---
 
-socket = io();
+socket = io({ query: { code: SESSION_CODE } });
 
 window.MY_SID = null;
 window.MY_UUID = null;

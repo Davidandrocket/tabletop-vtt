@@ -418,9 +418,7 @@ def create_session():
     }
     db_save_session(code)
 
-    session["code"] = code
-    session["role"] = "dm"
-    session["name"] = dm_name
+    session.setdefault("sessions", {})[code] = {"role": "dm", "name": dm_name}
     return redirect(url_for("vtt", code=code))
 
 
@@ -430,25 +428,26 @@ def join_session():
     name = request.form.get("name", "Player").strip() or "Player"
     if not ensure_session_loaded(code):
         return render_template("index.html", error="Session not found.")
-    session["code"] = code
-    session["role"] = "player"
-    session["name"] = name
-    # Stable identity for this player across reconnects/reloads
-    if "player_uuid" not in session:
-        session["player_uuid"] = str(uuid.uuid4())
+    sessions_map = session.setdefault("sessions", {})
+    # Preserve player_uuid per session for stable identity across reconnects
+    existing = sessions_map.get(code, {})
+    player_uuid = existing.get("player_uuid") or str(uuid.uuid4())
+    sessions_map[code] = {"role": "player", "name": name, "player_uuid": player_uuid}
+    session.modified = True
     return redirect(url_for("vtt", code=code))
 
 
 @app.route("/session/<code>")
 def vtt(code):
-    if not ensure_session_loaded(code) or "role" not in session:
+    if not ensure_session_loaded(code):
         return redirect(url_for("index"))
-    if session.get("role") == "player" and "player_uuid" not in session:
-        session["player_uuid"] = str(uuid.uuid4())
+    sess_entry = session.get("sessions", {}).get(code)
+    if not sess_entry:
+        return redirect(url_for("index"))
     return render_template("session.html",
                            code=code,
-                           role=session["role"],
-                           name=session["name"])
+                           role=sess_entry["role"],
+                           name=sess_entry["name"])
 
 
 @app.route("/session/<code>/accept_role")
@@ -458,16 +457,20 @@ def accept_role(code):
     pending = _role_tokens.pop(token, None)
     if not pending or pending["code"] != code or time.time() > pending["expires"]:
         return "Invalid or expired link", 400
-    session["role"] = pending["role"]
-    session["name"] = pending["name"]
-    if pending["role"] == "player" and "player_uuid" not in session:
-        session["player_uuid"] = str(uuid.uuid4())
+    new_role = pending["role"]
+    new_name = pending["name"]
+    sessions_map = session.setdefault("sessions", {})
+    existing = sessions_map.get(code, {})
+    player_uuid = existing.get("player_uuid") or (str(uuid.uuid4()) if new_role == "player" else None)
+    sessions_map[code] = {"role": new_role, "name": new_name, "player_uuid": player_uuid}
+    session.modified = True
     return redirect(url_for("vtt", code=code))
 
 
 @app.route("/session/<code>/upload_map", methods=["POST"])
 def upload_map(code):
-    if session.get("role") != "dm" or session.get("code") != code:
+    sess_entry = session.get("sessions", {}).get(code, {})
+    if sess_entry.get("role") != "dm":
         return {"error": "Forbidden"}, 403
     if not ensure_session_loaded(code):
         return {"error": "Session not found"}, 404
@@ -496,13 +499,13 @@ def upload_map(code):
 
 @socketio.on("connect")
 def on_connect():
-    code = session.get("code")
-    role = session.get("role")
-    name = session.get("name", "Unknown")
-    if not code or not ensure_session_loaded(code):
+    code = request.args.get("code", "").strip().upper()
+    sess_entry = session.get("sessions", {}).get(code)
+    if not sess_entry or not ensure_session_loaded(code):
         return False
-
-    player_uuid = session.get("player_uuid") or (str(uuid.uuid4()) if role == "player" else None)
+    role = sess_entry["role"]
+    name = sess_entry.get("name", "Unknown")
+    player_uuid = sess_entry.get("player_uuid") or (str(uuid.uuid4()) if role == "player" else None)
     join_room(code)
     socket_info[request.sid] = {"code": code, "role": role, "name": name, "player_uuid": player_uuid}
     sess = sessions[code]

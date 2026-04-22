@@ -1151,6 +1151,10 @@ function quickRoll(notation) {
   socket.emit("roll_dice", { notation, private: privateRoll });
 }
 
+function fortuneCookie() {
+  socket.emit("fortune_cookie");
+}
+
 // --- Chat ---
 
 function sendChat() {
@@ -1172,6 +1176,9 @@ function appendChat(msg, scroll = true) {
       : "";
     const privateTag = msg.private ? '<span class="dice-private-tag">🔒 </span>' : "";
     entry.innerHTML = `${privateTag}<span class="chat-who">${msg.name}</span> rolled <strong>${msg.notation}</strong>: <strong>${msg.result}</strong><span class="dice-detail">${rollDetail}</span>`;
+  } else if (msg.type === "fortune") {
+    entry.className = "chat-entry fortune-entry";
+    entry.innerHTML = `🥠 <span class="chat-who">${escapeHtml(msg.name)}</span> cracked a fortune cookie: <em>${escapeHtml(msg.fortune)}</em>`;
   } else {
     entry.className = "chat-entry";
     entry.innerHTML = `<span class="chat-who">${msg.name}:</span> ${escapeHtml(msg.text)}`;

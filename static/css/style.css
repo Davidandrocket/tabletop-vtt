@@ -661,6 +661,26 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 .chat-entry .dice-detail { font-size: 0.75rem; color: var(--text-dim); }
 .chat-entry.dice-private { opacity: 0.75; font-style: italic; }
 .dice-private-tag { font-size: 0.7rem; }
+.chat-entry.fortune-entry { color: var(--text-dim); }
+.chat-entry.fortune-entry .chat-who { color: var(--accent); }
+
+.btn-fortune {
+  width: 100%;
+  margin-top: 6px;
+  background: var(--panel);
+  border: 1px dashed var(--border);
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  padding: 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.btn-fortune:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--panel);
+}
 
 .chat-input-row { display: flex; gap: 6px; }
 .chat-input-row input { flex: 1; margin: 0; }

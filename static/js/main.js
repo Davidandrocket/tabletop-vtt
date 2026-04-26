@@ -1032,7 +1032,8 @@ function onTokenSelected(tokenId) {
 
 function refreshHpEditor(token) {
   document.getElementById("hp-token-name").textContent = token.name;
-  document.getElementById("hp-display").textContent = `${token.hp} / ${token.max_hp}`;
+  const hpHidden = token.hp === null || token.max_hp === null;
+  document.getElementById("hp-display").textContent = hpHidden ? "?? / ??" : `${token.hp} / ${token.max_hp}`;
 }
 
 function adjustHp(delta) {
@@ -1111,14 +1112,16 @@ function renderInitiative() {
     const token = sessionTokens[tokenId];
     if (!token) return;
 
-    const hpPct = token.max_hp > 0 ? token.hp / token.max_hp : 1;
-    const hpClass = hpPct <= 0.25 ? " low" : hpPct <= 0.6 ? " mid" : "";
+    const hpHidden = token.hp === null || token.max_hp === null;
+    const hpPct = (!hpHidden && token.max_hp > 0) ? token.hp / token.max_hp : 1;
+    const hpClass = hpHidden ? "" : (hpPct <= 0.25 ? " low" : hpPct <= 0.6 ? " mid" : "");
+    const hpText = hpHidden ? "??" : `${token.hp}/${token.max_hp}`;
     const row = document.createElement("div");
     row.className = "init-entry" + (index === currentTurn ? " active" : "");
     row.innerHTML = `
       <span class="init-num">${token.initiative}</span>
       <span class="init-name">${token.name}</span>
-      <span class="init-hp${hpClass}">${token.hp}/${token.max_hp}</span>
+      <span class="init-hp${hpClass}">${hpText}</span>
     `;
     list.appendChild(row);
   });

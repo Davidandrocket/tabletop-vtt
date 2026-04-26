@@ -367,6 +367,43 @@ def gen_code(length=6):
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 
+def sanitize_token_for_viewer(token, viewer_role, viewer_uuid):
+    """Strip HP from a token if the viewer shouldn't see it."""
+    if viewer_role == "dm":
+        return token
+    if token.get("show_hp", True):
+        return token
+    if token.get("player_id") and token.get("player_id") == viewer_uuid:
+        return token
+    sanitized = dict(token)
+    sanitized["hp"] = None
+    sanitized["max_hp"] = None
+    return sanitized
+
+
+def emit_token_to_room(event, token, sess):
+    """Emit a token-bearing event to all in the room with HP sanitized per recipient."""
+    dm_sid = sess.get("dm_socket")
+    if dm_sid:
+        emit(event, token, to=dm_sid)
+    for player_sid, player in sess["players"].items():
+        emit(event, sanitize_token_for_viewer(token, "player", player.get("player_uuid")), to=player_sid)
+
+
+def emit_hp_to_room(token, sess):
+    """Emit hp_updated per recipient, hiding HP from non-owner players if needed."""
+    full = {"id": token["id"], "hp": token["hp"], "max_hp": token["max_hp"]}
+    dm_sid = sess.get("dm_socket")
+    if dm_sid:
+        emit("hp_updated", full, to=dm_sid)
+    for player_sid, player in sess["players"].items():
+        viewer_uuid = player.get("player_uuid")
+        if token.get("show_hp", True) or token.get("player_id") == viewer_uuid:
+            emit("hp_updated", full, to=player_sid)
+        else:
+            emit("hp_updated", {"id": token["id"], "hp": None, "max_hp": None}, to=player_sid)
+
+
 def make_token(name, x=0, y=0, hp=10, max_hp=10, color="#e74c3c",
                is_player=False, player_id=None, image_url=None, size=1,
                show_hp=None, initiative_mod=0):
@@ -561,8 +598,14 @@ def on_connect():
         for entry in party_chars:
             entry["player_sid"] = uuid_to_sid.get(entry["player_uuid"])
 
-    visible_tokens = list(sess["tokens"].values()) if role == "dm" else \
-                     [t for t in sess["tokens"].values() if not t.get("hidden")]
+    if role == "dm":
+        visible_tokens = list(sess["tokens"].values())
+    else:
+        visible_tokens = [
+            sanitize_token_for_viewer(t, role, player_uuid)
+            for t in sess["tokens"].values()
+            if not t.get("hidden")
+        ]
     emit("session_state", {
         "role": role,
         "tokens": visible_tokens,
@@ -707,7 +750,7 @@ def on_add_token(data):
     )
     sess["tokens"][token["id"]] = token
     db_upsert_token(token, code)
-    emit("token_added", token, room=code)
+    emit_token_to_room("token_added", token, sess)
 
 
 @socketio.on("remove_token")
@@ -762,7 +805,7 @@ def on_update_hp(data):
     new_hp = max(0, min(int(data.get("hp", token["hp"])), token["max_hp"]))
     token["hp"] = new_hp
     db_upsert_token(token, code)
-    emit("hp_updated", {"id": tid, "hp": new_hp, "max_hp": token["max_hp"]}, room=code)
+    emit_hp_to_room(token, sess)
 
 
 @socketio.on("update_token")
@@ -815,7 +858,7 @@ def on_update_token(data):
         if "initiative_mod" in data:
             token["initiative_mod"] = int(data["initiative_mod"])
     db_upsert_token(token, code)
-    emit("token_updated", token, room=code)
+    emit_token_to_room("token_updated", token, sess)
 
 
 @socketio.on("update_token_initiative")
@@ -1317,7 +1360,7 @@ def on_spawn_library_token(data):
     )
     sess["tokens"][token["id"]] = token
     db_upsert_token(token, code)
-    emit("token_added", token, room=code)
+    emit_token_to_room("token_added", token, sess)
 
 
 @socketio.on("roll_dice")
@@ -1625,7 +1668,7 @@ def on_dicecloud_login(data):
                 t["max_hp"] = parsed["hp"]["max"]
                 t["hp"] = min(t["hp"], parsed["hp"]["max"])
                 db_upsert_token(t, code)
-                emit("token_updated", t, room=code)
+                emit_token_to_room("token_updated", t, sess)
                 break
 
     except requests.HTTPError as e:
@@ -1697,7 +1740,7 @@ def on_refresh_character(data=None):
                 t["max_hp"] = parsed["hp"]["max"]
                 t["hp"] = min(t["hp"], parsed["hp"]["max"])
                 db_upsert_token(t, code)
-                emit("token_updated", t, room=code)
+                emit_token_to_room("token_updated", t, sess)
                 break
 
     except requests.HTTPError as e:
@@ -1765,7 +1808,7 @@ def on_dndbeyond_import(data):
                 t["max_hp"] = parsed["hp"]["max"]
                 t["hp"] = min(t["hp"], parsed["hp"]["max"])
                 db_upsert_token(t, code)
-                emit("token_updated", t, room=code)
+                emit_token_to_room("token_updated", t, sess)
                 break
 
     except requests.HTTPError as e:

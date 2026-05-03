@@ -257,7 +257,10 @@
       <div class="panel-body">
 
         <div class="section-block">
-          <h3>Initiative</h3>
+          <div class="section-header-row">
+            <h3>Initiative</h3>
+            <span id="round-tracker" class="round-tracker hidden">Round <strong id="round-num">1</strong></span>
+          </div>
           <div id="initiative-list" class="initiative-list"></div>
           {% if role == 'dm' %}
           <div id="initiative-inputs" class="initiative-inputs"></div>

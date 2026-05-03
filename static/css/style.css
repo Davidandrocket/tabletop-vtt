@@ -621,6 +621,22 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 .section-block { display: flex; flex-direction: column; gap: 8px; }
 .section-block h3 { font-size: 0.8rem; text-transform: uppercase;
                     letter-spacing: 0.5px; color: var(--text-dim); }
+.section-block h3 { margin: 0; }
+
+.section-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.round-tracker {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+.round-tracker strong { color: var(--accent); }
 
 .dice-row { display: flex; gap: 6px; }
 .dice-row input { flex: 1; margin: 0; }

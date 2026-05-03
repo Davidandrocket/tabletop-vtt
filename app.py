@@ -96,6 +96,7 @@ def init_db():
             ("map_image_scale_y","REAL DEFAULT 1"),
             ("active_profile_id","INTEGER"),
             ("fog",              "TEXT DEFAULT '[]'"),
+            ("current_round",    "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
@@ -183,8 +184,8 @@ def db_save_session(code):
             INSERT OR REPLACE INTO sessions
                 (code, dm_name, map_cols, map_rows, initiative_order, current_turn,
                  map_image_url, map_offset_x, map_offset_y, map_image_scale, map_image_scale_y,
-                 active_profile_id, fog)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 active_profile_id, fog, current_round)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             code,
             sess["dm_name"],
@@ -199,6 +200,7 @@ def db_save_session(code):
             sess["map"].get("scale_y", 1),
             sess.get("active_profile_id"),
             json.dumps(fog_list),
+            sess.get("current_round", 0),
         ))
 
 
@@ -282,6 +284,7 @@ def db_load_session(code):
         "tokens": tokens,
         "initiative_order": json.loads(row["initiative_order"] or "[]"),
         "current_turn": row["current_turn"],
+        "current_round": row["current_round"] or 0,
         "map": {
             "cols": row["map_cols"], "rows": row["map_rows"], "grid_size": 50,
             "image_url": row["map_image_url"],
@@ -447,6 +450,7 @@ def create_session():
         "tokens": {},
         "initiative_order": [],
         "current_turn": -1,
+        "current_round": 0,
         "map": {"cols": 20, "rows": 15, "grid_size": 50, "image_url": None, "offset_x": 0, "offset_y": 0, "scale_x": 1, "scale_y": 1},
         "chat": [],
         "spell_shapes": {},
@@ -611,6 +615,7 @@ def on_connect():
         "tokens": visible_tokens,
         "initiative_order": sess["initiative_order"],
         "current_turn": sess["current_turn"],
+        "current_round": sess.get("current_round", 0),
         "map": sess["map"],
         "players": {sid: {"name": p["name"], "uuid": p.get("player_uuid")} for sid, p in sess["players"].items()},
         "chat": sess["chat"][-50:],
@@ -897,10 +902,12 @@ def on_start_combat(data=None):
     )
     sess["initiative_order"] = ordered
     sess["current_turn"] = 0 if ordered else -1
+    sess["current_round"] = 1 if ordered else 0
     db_save_session(code)
     emit("combat_started", {
         "order": ordered,
         "current_turn": sess["current_turn"],
+        "current_round": sess["current_round"],
         "tokens": list(sess["tokens"].values()),
     }, room=code)
 
@@ -914,9 +921,15 @@ def on_next_turn():
     sess = sessions[code]
     if not sess["initiative_order"]:
         return
-    sess["current_turn"] = (sess["current_turn"] + 1) % len(sess["initiative_order"])
+    new_turn = (sess["current_turn"] + 1) % len(sess["initiative_order"])
+    if new_turn == 0:
+        sess["current_round"] = sess.get("current_round", 1) + 1
+    sess["current_turn"] = new_turn
     db_save_session(code)
-    emit("turn_changed", {"current_turn": sess["current_turn"]}, room=code)
+    emit("turn_changed", {
+        "current_turn": sess["current_turn"],
+        "current_round": sess["current_round"],
+    }, room=code)
 
 
 @socketio.on("end_combat")
@@ -928,6 +941,7 @@ def on_end_combat():
     sess = sessions[code]
     sess["initiative_order"] = []
     sess["current_turn"] = -1
+    sess["current_round"] = 0
     db_save_session(code)
     emit("combat_ended", {}, room=code)
 

@@ -40,6 +40,7 @@ let fogRevealed = new Set(); // "col,row" strings of revealed cells
 window.fogRevealed = fogRevealed;
 let initiativeOrder = [];
 let currentTurn = -1;
+let currentRound = 0;
 let onlinePlayers = {};     // sid -> { name }
 let partyCharacters = {};   // character_id -> { player_uuid, player_sid, character }
 let playerCharacters = {};  // character_id -> char_data  (this player's own chars)
@@ -128,7 +129,9 @@ socket.on("session_state", (data) => {
   // Initiative / combat state
   initiativeOrder = data.initiative_order || [];
   currentTurn = data.current_turn ?? -1;
+  currentRound = data.current_round ?? 0;
   renderInitiative();
+  renderRoundTracker();
 
   if (currentTurn >= 0 && initiativeOrder.length > 0) {
     const activeId = initiativeOrder[currentTurn];
@@ -230,10 +233,12 @@ socket.on("hp_updated", (data) => {
 socket.on("combat_started", (data) => {
   initiativeOrder = data.order;
   currentTurn = data.current_turn;
+  currentRound = data.current_round ?? 1;
   for (const token of data.tokens) {
     sessionTokens[token.id] = token;
   }
   renderInitiative();
+  renderRoundTracker();
   const activeId = initiativeOrder[currentTurn];
   highlightCurrentTurn(activeId);
   updateTurnIndicator(activeId);
@@ -242,8 +247,10 @@ socket.on("combat_started", (data) => {
 
 socket.on("turn_changed", (data) => {
   currentTurn = data.current_turn;
+  if (data.current_round !== undefined) currentRound = data.current_round;
   const activeId = initiativeOrder[currentTurn];
   renderInitiative();
+  renderRoundTracker();
   highlightCurrentTurn(activeId);
   updateTurnIndicator(activeId);
 });
@@ -251,7 +258,9 @@ socket.on("turn_changed", (data) => {
 socket.on("combat_ended", () => {
   initiativeOrder = [];
   currentTurn = -1;
+  currentRound = 0;
   renderInitiative();
+  renderRoundTracker();
   highlightCurrentTurn(null);
   updateTurnIndicator(null);
   setCombatButtonState(false);
@@ -1097,6 +1106,18 @@ function setCombatButtonState(inCombat) {
 }
 
 // --- Initiative list ---
+
+function renderRoundTracker() {
+  const tracker = document.getElementById("round-tracker");
+  const num = document.getElementById("round-num");
+  if (!tracker || !num) return;
+  if (currentRound > 0) {
+    num.textContent = currentRound;
+    tracker.classList.remove("hidden");
+  } else {
+    tracker.classList.add("hidden");
+  }
+}
 
 function renderInitiative() {
   const list = document.getElementById("initiative-list");

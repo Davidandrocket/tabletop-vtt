@@ -906,6 +906,20 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
   border-radius: 4px;
 }
 .exh-stepper span { min-width: 16px; text-align: center; font-weight: 600; color: var(--text); }
+.exh-stepper input[type="number"] {
+  width: 50px;
+  padding: 1px 4px;
+  margin: 0;
+  font-size: 0.82rem;
+  text-align: center;
+  font-weight: 600;
+  -moz-appearance: textfield;
+}
+.exh-stepper input[type="number"]::-webkit-inner-spin-button,
+.exh-stepper input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
 
 .initiative-inputs { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .init-input-row {

@@ -1296,7 +1296,8 @@ function renderConditionIcons(group, token, radius) {
   group.findOne(".cond-group")?.destroy();
 
   const conditions = token.conditions || [];
-  if (conditions.length === 0) return;
+  const flying = token.flying || 0;
+  if (conditions.length === 0 && flying <= 0) return;
 
   const condGroup = new Konva.Group({ name: "cond-group", listening: false });
   group.add(condGroup);
@@ -1304,11 +1305,16 @@ function renderConditionIcons(group, token, radius) {
   const uniqueConds = [...new Set(conditions.filter(c => c !== "exhaustion"))];
   const exhCount    = conditions.filter(c => c === "exhaustion").length;
 
-  // Y of the top of the horizontal (non-exhaustion) icon row, directly above token
+  // Build the horizontal row entries (flying first if active, then conditions)
+  const rowEntries = [];
+  if (flying > 0) rowEntries.push({ key: "flying", badge: String(flying) });
+  uniqueConds.forEach(c => rowEntries.push({ key: c, badge: null }));
+
+  // Y of the top of the horizontal icon row, directly above token
   const rowY = -radius - COND_GAP - COND_SIZE;
 
-  // Draw background + image for a single icon
-  function placeIcon(imgEl, x, y) {
+  // Draw background + image for a single icon, plus optional badge
+  function placeIcon(imgEl, x, y, badge) {
     condGroup.add(new Konva.Rect({
       x, y, width: COND_SIZE, height: COND_SIZE,
       fill: "rgba(0,0,0,0.55)", cornerRadius: 3,
@@ -1316,15 +1322,39 @@ function renderConditionIcons(group, token, radius) {
     condGroup.add(new Konva.Image({
       image: imgEl, x, y, width: COND_SIZE, height: COND_SIZE,
     }));
+    if (badge) {
+      // Badge in upper-right: dark bg pill with white number
+      const badgePadding = 3;
+      const badgeText = new Konva.Text({
+        text: badge,
+        fontSize: 10,
+        fontStyle: "bold",
+        fill: "#fff",
+        listening: false,
+      });
+      const tw = badgeText.width();
+      const bw = tw + badgePadding * 2;
+      const bh = 12;
+      const bx = x + COND_SIZE - bw / 2;
+      const by = y - bh / 2;
+      condGroup.add(new Konva.Rect({
+        x: bx, y: by, width: bw, height: bh,
+        fill: "rgba(0,0,0,0.85)", cornerRadius: 6,
+        stroke: "#fff", strokeWidth: 1,
+      }));
+      badgeText.x(bx + badgePadding);
+      badgeText.y(by + 1);
+      condGroup.add(badgeText);
+    }
     tokenLayer.batchDraw();
   }
 
-  // Horizontal row of non-exhaustion conditions, centered
-  const rowWidth = uniqueConds.length * COND_SIZE + Math.max(0, uniqueConds.length - 1) * COND_GAP;
+  // Horizontal row, centered
+  const rowWidth = rowEntries.length * COND_SIZE + Math.max(0, rowEntries.length - 1) * COND_GAP;
   const rowStartX = -(rowWidth / 2);
-  uniqueConds.forEach((cond, i) => {
+  rowEntries.forEach((entry, i) => {
     const x = rowStartX + i * (COND_SIZE + COND_GAP);
-    loadConditionImage(cond).then(img => { if (img) placeIcon(img, x, rowY); });
+    loadConditionImage(entry.key).then(img => { if (img) placeIcon(img, x, rowY, entry.badge); });
   });
 
   // Exhaustion stack, centered, each level stacked vertically above the horizontal row

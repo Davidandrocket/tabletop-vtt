@@ -83,6 +83,7 @@ def init_db():
             ("hidden",         "INTEGER DEFAULT 0"),
             ("show_hp",        "INTEGER DEFAULT 1"),
             ("initiative_mod", "INTEGER DEFAULT 0"),
+            ("flying",         "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE tokens ADD COLUMN {col} {defn}")
@@ -210,8 +211,8 @@ def db_upsert_token(token, code):
             INSERT OR REPLACE INTO tokens
                 (id, session_code, name, x, y, hp, max_hp,
                  color, is_player, player_id, initiative, conditions,
-                 image_url, size, hidden, show_hp, initiative_mod)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 image_url, size, hidden, show_hp, initiative_mod, flying)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             token["id"], code, token["name"],
             token["x"], token["y"],
@@ -226,6 +227,7 @@ def db_upsert_token(token, code):
             1 if token.get("hidden") else 0,
             1 if token.get("show_hp", True) else 0,
             token.get("initiative_mod", 0),
+            int(token.get("flying", 0) or 0),
         ))
 
 
@@ -274,6 +276,7 @@ def db_load_session(code):
         token["hidden"]        = bool(token.get("hidden", 0))
         token["show_hp"]       = bool(token.get("show_hp", 1))
         token["initiative_mod"] = int(token.get("initiative_mod") or 0)
+        token["flying"]        = int(token.get("flying") or 0)
         token["conditions"]    = json.loads(token.get("conditions") or "[]")
         tokens[token["id"]] = token
 
@@ -421,6 +424,7 @@ def make_token(name, x=0, y=0, hp=10, max_hp=10, color="#e74c3c",
         "initiative": 0,
         "initiative_mod": initiative_mod,
         "conditions": [],
+        "flying": 0,
         "image_url": image_url,
         "size": size,
         "hidden": False,
@@ -851,6 +855,11 @@ def on_update_token(data):
             cleaned = [c for c in raw if isinstance(c, str) and c in allowed]
             exh = min(cleaned.count("exhaustion"), 6)
             token["conditions"] = [c for c in cleaned if c != "exhaustion"] + ["exhaustion"] * exh
+    if "flying" in data:
+        try:
+            token["flying"] = max(0, min(99999, int(data["flying"])))
+        except (TypeError, ValueError):
+            pass
     if info["role"] == "dm":
         if "is_player" in data:
             token["is_player"] = bool(data["is_player"])

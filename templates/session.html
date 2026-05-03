@@ -387,6 +387,15 @@
             <button type="button" onclick="stepExhaustion(1)">+</button>
           </div>
         </div>
+        <div class="cond-exhaustion">
+          <img src="/static/conditions/flying.svg">
+          <span>Flying (ft)</span>
+          <div class="exh-stepper">
+            <button type="button" onclick="stepFlying(-5)">−</button>
+            <input id="edit-tok-flying-val" type="number" min="0" step="5" value="0">
+            <button type="button" onclick="stepFlying(5)">+</button>
+          </div>
+        </div>
       </div>
 
       <div id="edit-tok-player-section" class="hidden">

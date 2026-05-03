@@ -936,6 +936,7 @@ function openEditToken(tokenId) {
   // Populate condition checkboxes
   const exhCount = (token.conditions || []).filter(c => c === "exhaustion").length;
   document.getElementById("edit-tok-exhaustion-val").textContent = exhCount;
+  document.getElementById("edit-tok-flying-val").value = token.flying || 0;
   document.querySelectorAll(".condition-grid .cond-toggle input[type=checkbox]").forEach(cb => {
     cb.checked = (token.conditions || []).includes(cb.value);
   });
@@ -978,6 +979,12 @@ function stepExhaustion(delta) {
   el.textContent = val;
 }
 
+function stepFlying(delta) {
+  const el = document.getElementById("edit-tok-flying-val");
+  const val = Math.max(0, (parseInt(el.value) || 0) + delta);
+  el.value = val;
+}
+
 function submitEditToken() {
   if (!_editingTokenId) return;
   const isPlayer = ROLE === "dm" && document.getElementById("edit-tok-isplayer").checked;
@@ -998,6 +1005,7 @@ function submitEditToken() {
     size: parseInt(document.getElementById("edit-tok-size").value) || 1,
     image_url: document.getElementById("edit-tok-image").value.trim() || null,
     conditions,
+    flying: Math.max(0, parseInt(document.getElementById("edit-tok-flying-val").value) || 0),
   };
   if (ROLE === "dm") {
     data.is_player = isPlayer;

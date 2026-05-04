@@ -166,6 +166,7 @@ def init_db():
             ("procedural_state", "TEXT"),
             ("origin_x",         "INTEGER DEFAULT 0"),
             ("origin_y",         "INTEGER DEFAULT 0"),
+            ("preset",           "TEXT DEFAULT 'generic'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE map_profiles ADD COLUMN {col} {defn}")
@@ -1418,6 +1419,10 @@ def on_create_procedural_profile(data):
     except (TypeError, ValueError):
         seed = random.randint(0, 2**31 - 1)
 
+    preset_name = str(data.get("preset") or "generic").strip().lower()
+    if preset_name not in dungeon_gen.PRESETS:
+        preset_name = "generic"
+
     # Default grid is large enough that typical play won't run off the
     # edges; only a fraction is used per dungeon, the rest stays as void.
     cols = int(data.get("cols") or 200)
@@ -1425,17 +1430,17 @@ def on_create_procedural_profile(data):
     origin_x = cols // 2
     origin_y = rows // 2
 
-    world = dungeon_gen.make_world(seed)
+    world = dungeon_gen.make_world(seed, preset_name=preset_name)
 
     with get_db() as conn:
         cursor = conn.execute("""
             INSERT INTO map_profiles
                 (session_code, name, image_url, offset_x, offset_y, scale_x, scale_y,
-                 cols, rows, fog, kind, seed, procedural_state, origin_x, origin_y)
-            VALUES (?, ?, NULL, 0, 0, 1, 1, ?, ?, '[]', 'procedural', ?, ?, ?, ?)
+                 cols, rows, fog, kind, seed, procedural_state, origin_x, origin_y, preset)
+            VALUES (?, ?, NULL, 0, 0, 1, 1, ?, ?, '[]', 'procedural', ?, ?, ?, ?, ?)
         """, (
             code, name, cols, rows,
-            seed, json.dumps(world.to_dict()), origin_x, origin_y,
+            seed, json.dumps(world.to_dict()), origin_x, origin_y, preset_name,
         ))
         profile_id = cursor.lastrowid
 
@@ -1469,6 +1474,110 @@ def on_create_procedural_profile(data):
         "profiles": db_load_profiles(code),
         "active_profile_id": profile_id,
     }, room=code)
+
+
+def _chest_facing_from_neighbors(world, cell):
+    """Pick a facing for a chest based on adjacent walls. Chests should
+    'open' away from the wall they're against. If no adjacent wall (mid-
+    room placement), default to south."""
+    cx, cy = cell
+    if world.cells.get((cx, cy - 1)) == dungeon_gen.CellKind.WALL:
+        return "south"  # against the north wall, opens south
+    if world.cells.get((cx, cy + 1)) == dungeon_gen.CellKind.WALL:
+        return "north"
+    if world.cells.get((cx - 1, cy)) == dungeon_gen.CellKind.WALL:
+        return "east"
+    if world.cells.get((cx + 1, cy)) == dungeon_gen.CellKind.WALL:
+        return "west"
+    return "south"
+
+
+@socketio.on("procedural_chest_place_remove")
+def on_procedural_chest_place_remove(data):
+    """DM hotkey: spawn a chest at a target cell, or remove it if one's
+    already there. Server picks the facing from adjacent walls."""
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess or not sess.get("procedural"):
+        return
+    try:
+        col = int(data["col"])
+        row = int(data["row"])
+    except (KeyError, TypeError, ValueError):
+        return
+
+    p = sess["procedural"]
+    world = p["world"]
+    cell = (col - p["origin_x"], row - p["origin_y"])
+
+    if cell in world.chests:
+        del world.chests[cell]
+        world.opened_chests.discard(cell)
+        action = "removed"
+        facing = None
+    else:
+        kind = world.cells.get(cell)
+        if kind not in (dungeon_gen.CellKind.ROOM_FLOOR, dungeon_gen.CellKind.HALL_FLOOR):
+            return  # only place chests on floor cells
+        facing = _chest_facing_from_neighbors(world, cell)
+        world.chests[cell] = facing
+        action = "placed"
+
+    state_json = json.dumps(world.to_dict())
+    socketio.start_background_task(
+        _persist_procedural_state_json_async, sess["active_profile_id"], state_json
+    )
+    socketio.emit(
+        "procedural_chest_changed",
+        {"col": col, "row": row, "action": action, "facing": facing},
+        room=code,
+    )
+
+
+@socketio.on("procedural_chest_toggle")
+def on_procedural_chest_toggle(data):
+    """DM clicked a chest cell. Toggle its opened state, persist, broadcast.
+    Sends a tiny event (just the cell + new state) instead of the full
+    procedural_state payload — chest toggles are frequent-ish UX actions
+    and don't need to ship the whole world over the wire."""
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess or not sess.get("procedural"):
+        return
+    try:
+        col = int(data["col"])
+        row = int(data["row"])
+    except (KeyError, TypeError, ValueError):
+        return
+
+    p = sess["procedural"]
+    world = p["world"]
+    cell = (col - p["origin_x"], row - p["origin_y"])
+    if cell not in world.chests:
+        return
+
+    if cell in world.opened_chests:
+        world.opened_chests.discard(cell)
+        opened = False
+    else:
+        world.opened_chests.add(cell)
+        opened = True
+
+    state_json = json.dumps(world.to_dict())
+    socketio.start_background_task(
+        _persist_procedural_state_json_async, sess["active_profile_id"], state_json
+    )
+    socketio.emit(
+        "procedural_chest_toggled",
+        {"col": col, "row": row, "opened": opened},
+        room=code,
+    )
 
 
 @socketio.on("delete_map_profile")

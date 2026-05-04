@@ -11,6 +11,93 @@ const CELL_COLORS = {
   door_closed: "#5a3210",
 };
 
+// Center cells of the spawn room get tinted teal so the DM/players can tell
+// which room is the starting one at a glance.
+const SPAWN_MARKER_COLOR = "#3f7d6f";
+
+// Floor colors for special rooms (override room_floor when present).
+const SPECIAL_FLOOR_COLORS = {
+  boss:     "#5a2a2e",  // dark crimson
+  treasure: "#8a7a3e",  // gold tint
+  secret:   "#5a3a6e",  // purple tint
+};
+
+// Secret doors render with a wall-ish color so players don't notice them
+// at a glance. Slightly off the base wall color so the DM (and observant
+// players) can spot them if they look carefully.
+const SECRET_DOOR_COLOR = "#3d3a3e";
+
+// chest.svg's default art faces south (opens downward). Rotate clockwise
+// by these radians to make it open in other directions:
+//   south = 0   west = 90°   north = 180°   east = 270°
+const CHEST_ROTATION = {
+  south: 0,
+  west:  Math.PI / 2,
+  north: Math.PI,
+  east:  3 * Math.PI / 2,
+};
+
+// Single shared <img> for the chest sprite. Loaded once on first render;
+// subsequent renders use the cached HTMLImageElement.
+let chestImage = null;
+function ensureChestImage() {
+  if (chestImage !== null) return;
+  chestImage = new Image();
+  chestImage.onload = () => {
+    // Trigger a redraw once the sprite is decoded so chests appear on
+    // initial load (sceneFunc skipped them while !complete).
+    if (cellLayer) cellLayer.batchDraw();
+  };
+  chestImage.src = "/static/dungeon/chest.svg";
+}
+
+// Module-level mirror of the procedural payload's chest data. Updated on
+// every renderProceduralCells; read by the stage click handler and the
+// chest-toggle socket listener.
+let proceduralChests = {};            // "col,row" -> facing
+let proceduralChestsOpened = new Set();  // "col,row" of opened chests
+
+// Try to handle a stage click as a chest toggle. Returns true if it took
+// the click (and emitted the toggle event); false otherwise. DM only,
+// gated to no-tool-active so we don't fight with ruler/spell/fog.
+function _tryChestClick() {
+  if (document.body.dataset.role !== "dm") return false;
+  if (selectionActive || rulerActive || pingActive || spellActive || fogMode) return false;
+  if (!stage) return false;
+  const cell = stagePointerToCell();
+  const key = `${cell.col},${cell.row}`;
+  if (!(key in proceduralChests)) return false;
+  window.socketEmit?.("procedural_chest_toggle", { col: cell.col, row: cell.row });
+  return true;
+}
+
+// Called by main.js when the server broadcasts a chest toggle.
+function applyChestToggle(col, row, opened) {
+  const key = `${col},${row}`;
+  if (opened) proceduralChestsOpened.add(key);
+  else proceduralChestsOpened.delete(key);
+  if (cellLayer) cellLayer.batchDraw();
+}
+window.applyChestToggle = applyChestToggle;
+
+// Called when the server broadcasts a chest spawn/removal (C-key DM action).
+function applyChestChange(col, row, action, facing) {
+  const key = `${col},${row}`;
+  if (action === "removed") {
+    delete proceduralChests[key];
+    proceduralChestsOpened.delete(key);
+  } else if (action === "placed") {
+    proceduralChests[key] = facing;
+    proceduralChestsOpened.delete(key);
+  }
+  if (cellLayer) cellLayer.batchDraw();
+}
+window.applyChestChange = applyChestChange;
+
+// True when a procedural map is currently active. Used by the C-key
+// handler to know whether the shortcut applies.
+window.hasProceduralMap = () => proceduralBounds !== null;
+
 let stage, imageLayer, gridLayer, fogLayer, tokenLayer, selectionLayer, rulerLayer, pingLayer, spellLayer, cellLayer;
 // Bounding box of procedural cells in cell coords, or null when no procedural
 // map is active. renderFog reads this to extend the fog overlay past the
@@ -81,7 +168,11 @@ function initMap(cols, rows) {
   });
 
   imageLayer = new Konva.Layer();
-  gridLayer = new Konva.Layer();
+  // gridLayer is purely cosmetic (background rect + grid lines, no
+  // handlers). Keeping it listenable makes its background rect intercept
+  // clicks and break stage-level handlers like chest-toggle and token
+  // deselection in no-image / procedural sessions.
+  gridLayer = new Konva.Layer({ listening: false });
   cellLayer  = new Konva.Layer({ listening: false });  // procedural cells, painted over gridLayer
   spellLayer = new Konva.Layer({ listening: false });
   tokenLayer = new Konva.Layer();
@@ -113,7 +204,10 @@ function initMap(cols, rows) {
   let stagePanned = false;
   stage.on("dragmove", () => { stagePanned = true; });
   stage.on("click tap", (e) => {
-    if (e.target === stage && !stagePanned) deselectToken();
+    if (e.target === stage && !stagePanned) {
+      // Try chest click first; only deselect if it didn't take the click.
+      if (!_tryChestClick()) deselectToken();
+    }
     stagePanned = false;
   });
 
@@ -309,6 +403,8 @@ function renderProceduralCells(payload) {
   cellLayer.destroyChildren();
   if (!payload || !payload.cells) {
     proceduralBounds = null;
+    proceduralChests = {};
+    proceduralChestsOpened = new Set();
     cellLayer.batchDraw();
     return;
   }
@@ -323,6 +419,17 @@ function renderProceduralCells(payload) {
     sealedDoorCells.add(`${op.x + (op.perp_x || 0)},${op.y + (op.perp_y || 0)}`);
   }
 
+  // Pull the rest of the payload up front so the bucketing loop below can
+  // reference them; an earlier iteration declared these *after* the loop
+  // and tripped the const-before-init dead-zone.
+  ensureChestImage();
+  const chests = payload.chests || {};
+  proceduralChests = chests;
+  proceduralChestsOpened = new Set(payload.chests_opened || []);
+  const spawnMarker = payload.spawn_marker || [];
+  const specialFloors = payload.special_floors || {};
+  const secretDoors = new Set(payload.secret_doors || []);
+
   // Bucket cell keys by color so the renderer sets fillStyle once per group.
   // Track bbox in the same pass so we don't iterate twice.
   const byColor = new Map();
@@ -335,8 +442,16 @@ function renderProceduralCells(payload) {
     if (r < minY) minY = r;
     if (r > maxY) maxY = r;
     let color = CELL_COLORS[kind] || CELL_COLORS.wall;
-    if (kind === "door" && sealedDoorCells.has(key)) {
-      color = CELL_COLORS.door_closed;
+    if (kind === "door") {
+      if (secretDoors.has(key)) {
+        // Secret doors mimic walls; secret state takes precedence over
+        // sealed/open distinction so players can't spot them by color.
+        color = SECRET_DOOR_COLOR;
+      } else if (sealedDoorCells.has(key)) {
+        color = CELL_COLORS.door_closed;
+      }
+    } else if (kind === "room_floor" && specialFloors[key]) {
+      color = SPECIAL_FLOOR_COLORS[specialFloors[key]] || color;
     }
     let bucket = byColor.get(color);
     if (!bucket) { bucket = []; byColor.set(color, bucket); }
@@ -357,6 +472,37 @@ function renderProceduralCells(payload) {
           const c = +key.slice(0, i);
           const r = +key.slice(i + 1);
           ctx.fillRect(c * GRID, r * GRID, GRID, GRID);
+        }
+      }
+      // Spawn marker tint paints over the base floor where applicable.
+      if (spawnMarker.length) {
+        ctx.fillStyle = SPAWN_MARKER_COLOR;
+        for (const key of spawnMarker) {
+          const i = key.indexOf(",");
+          if (i < 0) continue;
+          const c = +key.slice(0, i);
+          const r = +key.slice(i + 1);
+          ctx.fillRect(c * GRID, r * GRID, GRID, GRID);
+        }
+      }
+      // Chest sprites on top of cells. Centered + rotated per facing.
+      // Opened chests render at reduced opacity so DMs can track which
+      // ones have been emptied during the session.
+      if (chestImage && chestImage.complete && chestImage.naturalWidth > 0) {
+        const half = GRID / 2;
+        for (const key in chests) {
+          const i = key.indexOf(",");
+          if (i < 0) continue;
+          const c = +key.slice(0, i);
+          const r = +key.slice(i + 1);
+          const facing = chests[key];
+          const rot = CHEST_ROTATION[facing] || 0;
+          ctx.save();
+          ctx.translate(c * GRID + half, r * GRID + half);
+          if (rot) ctx.rotate(rot);
+          if (proceduralChestsOpened.has(key)) ctx.globalAlpha = 0.4;
+          ctx.drawImage(chestImage, -half, -half, GRID, GRID);
+          ctx.restore();
         }
       }
     },

@@ -180,6 +180,16 @@ socket.on("procedural_state", (msg) => {
   window.renderProceduralCells?.(msg?.data || null);
 });
 
+socket.on("procedural_chest_toggled", (msg) => {
+  if (!msg) return;
+  window.applyChestToggle?.(msg.col, msg.row, !!msg.opened);
+});
+
+socket.on("procedural_chest_changed", (msg) => {
+  if (!msg) return;
+  window.applyChestChange?.(msg.col, msg.row, msg.action, msg.facing);
+});
+
 socket.on("fog_updated", (data) => {
   fogRevealed.clear();
   for (const [col, row] of (data.fog || [])) {
@@ -850,9 +860,11 @@ function deleteMapProfile(id) {
 function createProceduralProfile() {
   const nameEl = document.getElementById("procedural-name-input");
   const seedEl = document.getElementById("procedural-seed-input");
+  const presetEl = document.getElementById("procedural-preset-input");
   const name = (nameEl?.value || "").trim() || "Procedural Dungeon";
   const seedRaw = (seedEl?.value || "").trim();
-  const payload = { name };
+  const preset = (presetEl?.value || "generic").trim() || "generic";
+  const payload = { name, preset };
   if (seedRaw) {
     const n = Number(seedRaw);
     if (Number.isFinite(n)) payload.seed = Math.trunc(n);
@@ -1362,6 +1374,15 @@ document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
   if (e.key === "Home") resetMapView();
   if ((e.key === "Delete" || e.key === "Backspace") && ROLE === "dm") removeSelected();
+
+  // C: spawn or remove a chest at the cursor cell (procedural maps only).
+  // Plain "C" (no Ctrl/Meta/Alt) so we don't clash with Ctrl+C copy below.
+  if ((e.key === "c" || e.key === "C") && !e.ctrlKey && !e.metaKey && !e.altKey
+      && ROLE === "dm" && window.hasProceduralMap?.()) {
+    const cell = window.getLastMouseCell?.();
+    if (cell) socket.emit("procedural_chest_place_remove", { col: cell.col, row: cell.row });
+    return;
+  }
 
   // Copy: Ctrl+C
   if (e.ctrlKey && e.key.toLowerCase() === "c") {

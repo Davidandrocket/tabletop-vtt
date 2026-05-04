@@ -37,21 +37,103 @@ class OpeningState:
     BLOCKED = "blocked"
 
 
-# --- Tunables (mirror config.py from infinite_dungeon) ---
-
-ROOM_SIZE_RANGE = (4, 9)
-HALL_SEGMENT_LENGTH = (4, 10)
-N_NEW_DOORS_RANGE = (1, 3)
+# --- Tunables ---
+# Gameplay/UX tunables (apply equally to all presets)
 RESOLUTION_RADIUS = 9
 REVEAL_BFS_DEPTH = 7
 DOOR_PEEK_BFS_DEPTH = 5
 MAX_PLACEMENT_ATTEMPTS = 8
 
-DOOR_BEHAVIOR_WEIGHTS = {"room": 60, "hall": 40}
-HALL_BEHAVIOR_WEIGHTS = {"straight": 55, "room": 25, "junction": 20}
-JUNCTION_EXIT_COUNT_WEIGHTS = {2: 70, 3: 30}
 
-SPAWN_ROOM_SIZE = (6, 6)
+# Style/shape tunables live in a Preset object hung off each World.  Add
+# new presets by appending another entry to PRESETS at the bottom of this
+# block; the UI dropdown reads names from there.
+
+@dataclass
+class Preset:
+    name: str
+    room_size_range: tuple        # interior w/h sample range
+    hall_segment_length: tuple    # cells per straight segment
+    n_new_doors_range: tuple      # extra doorways per new room
+    door_behavior_weights: dict   # past a sealed door: room vs hall
+    hall_behavior_weights: dict   # at a hall open end: straight/room/junction
+    junction_exit_count_weights: dict  # 2-way vs 3-way intersections
+    chest_chance: float           # per-roll chest probability (rooms roll twice, dead-ends once)
+    spawn_room_size: tuple
+
+
+PRESET_GENERIC = Preset(
+    name="generic",
+    room_size_range=(4, 9),
+    hall_segment_length=(4, 10),
+    n_new_doors_range=(1, 3),
+    door_behavior_weights={"room": 60, "hall": 40},
+    hall_behavior_weights={"straight": 55, "room": 25, "junction": 20},
+    junction_exit_count_weights={2: 70, 3: 30},
+    chest_chance=0.25,
+    spawn_room_size=(6, 6),
+)
+
+
+# Labyrinth: small rare rooms wedged into a sprawl of corridors and
+# intersections. Most generation is hallway, rooms have few doors so they
+# tend toward dead-ends, junctions split three-way half the time.
+PRESET_LABYRINTH = Preset(
+    name="labyrinth",
+    room_size_range=(3, 5),
+    hall_segment_length=(3, 7),
+    n_new_doors_range=(1, 2),
+    door_behavior_weights={"room": 20, "hall": 80},
+    hall_behavior_weights={"straight": 50, "room": 10, "junction": 40},
+    junction_exit_count_weights={2: 50, 3: 50},
+    chest_chance=0.30,
+    spawn_room_size=(4, 4),
+)
+
+
+PRESETS = {p.name: p for p in (PRESET_GENERIC, PRESET_LABYRINTH)}
+
+
+def get_preset(name):
+    """Look up a preset by name; falls back to GENERIC on unknown name so
+    older procedural profiles (pre-presets) keep loading."""
+    return PRESETS.get(name) or PRESET_GENERIC
+
+
+# --- Special rooms ---
+# A fraction of new rooms get promoted to a "special" type with distinct
+# size/door/chest budgets and a unique floor color on the client.
+
+SPECIAL_ROOM_CHANCE = 0.20
+
+# Once a room is decided to be special, weights pick which type.
+SPECIAL_ROOM_TYPE_WEIGHTS = {"boss": 40, "secret": 25, "treasure": 35}
+
+# Per-type overrides applied when a room becomes special. size_range
+# overrides preset.room_size_range; n_doors_range overrides
+# preset.n_new_doors_range; min/max_chests bound chest rolls for that room.
+SPECIAL_ROOM_PROFILES = {
+    "boss": {
+        "size_range":     (7, 11),
+        "n_doors_range":  (0, 1),  # 0-1 *additional* outgoing doors
+        "min_chests":     1,
+        "max_chests":     2,
+    },
+    "treasure": {
+        "size_range":     (3, 5),
+        "n_doors_range":  (0, 0),  # cul-de-sac
+        "min_chests":     2,
+        "max_chests":     3,
+    },
+    "secret": {
+        "size_range":     (3, 5),
+        "n_doors_range":  (0, 0),
+        # Always at least one chest so finding a secret room actually pays
+        # off — anticlimax of an empty hidden room is worse than no secret.
+        "min_chests":     1,
+        "max_chests":     2,
+    },
+}
 
 
 # --- Data model ---
@@ -72,12 +154,31 @@ class Opening:
 
 
 class World:
-    def __init__(self, seed: int):
+    def __init__(self, seed: int, preset: "Preset | None" = None):
         self.seed = seed
+        self.preset = preset or PRESET_GENERIC
         # cells: (x, y) -> kind str
         self.cells: dict[tuple[int, int], str] = {}
         self.openings: list[Opening] = []
         self.revealed: set[tuple[int, int]] = set()
+        # chests: cell -> facing direction ("north"|"south"|"east"|"west").
+        # The chest sits on a floor cell; the cell stays room/hall_floor for
+        # all walkability/flood/merge purposes. Facing is the direction the
+        # chest "opens" toward (away from the wall it's against).
+        self.chests: dict[tuple[int, int], str] = {}
+        # opened_chests: subset of self.chests cells that the DM has marked
+        # as opened. Rendered dimmed so DMs can track which loot rooms are
+        # done at a glance.
+        self.opened_chests: set[tuple[int, int]] = set()
+        # special_floors: floor cells of "special" rooms (boss/treasure/
+        # secret), tagged so the client can paint them with distinct
+        # colors. Cells not in this dict render as their normal kind.
+        self.special_floors: dict[tuple[int, int], str] = {}
+        # secret_doors: door cells flagged as secret. They function as
+        # normal doors (still walkable, BFS still treats them as doors)
+        # but render with the wall color (or a near-wall tint) on the
+        # client so players have to discover them by trying to walk in.
+        self.secret_doors: set[tuple[int, int]] = set()
 
     def get(self, x, y):
         return self.cells.get((x, y))
@@ -100,6 +201,7 @@ class World:
     def to_dict(self):
         return {
             "seed": self.seed,
+            "preset": self.preset.name,
             "cells": {f"{x},{y}": k for (x, y), k in self.cells.items()},
             "openings": [
                 {"kind": o.kind, "x": o.x, "y": o.y, "dx": o.dx, "dy": o.dy,
@@ -107,11 +209,17 @@ class World:
                 for o in self.openings
             ],
             "revealed": [f"{x},{y}" for (x, y) in self.revealed],
+            "chests": {f"{x},{y}": facing for (x, y), facing in self.chests.items()},
+            "opened_chests": [f"{x},{y}" for (x, y) in self.opened_chests],
+            "special_floors": {
+                f"{x},{y}": kind for (x, y), kind in self.special_floors.items()
+            },
+            "secret_doors": [f"{x},{y}" for (x, y) in self.secret_doors],
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "World":
-        w = cls(seed=int(d["seed"]))
+        w = cls(seed=int(d["seed"]), preset=get_preset(d.get("preset")))
         for key, kind in d.get("cells", {}).items():
             x, y = key.split(",")
             w.cells[(int(x), int(y))] = kind
@@ -125,6 +233,18 @@ class World:
         for key in d.get("revealed", []):
             x, y = key.split(",")
             w.revealed.add((int(x), int(y)))
+        for key, facing in (d.get("chests") or {}).items():
+            x, y = key.split(",")
+            w.chests[(int(x), int(y))] = facing
+        for key in d.get("opened_chests", []):
+            x, y = key.split(",")
+            w.opened_chests.add((int(x), int(y)))
+        for key, kind in (d.get("special_floors") or {}).items():
+            x, y = key.split(",")
+            w.special_floors[(int(x), int(y))] = kind
+        for key in d.get("secret_doors", []):
+            x, y = key.split(",")
+            w.secret_doors.add((int(x), int(y)))
         return w
 
 
@@ -239,12 +359,26 @@ def _place_doorway_on_wall(world, rx0, ry0, w, h, side, rng):
     return False
 
 
-def _add_room_doorways(world, rx0, ry0, w, h, incoming_side, rng):
+def _add_room_doorways(world, rx0, ry0, w, h, incoming_side, rng, *, n_range=None):
     available = [s for s in ("north", "south", "east", "west") if s != incoming_side]
     rng.shuffle(available)
-    n = rng.randint(*N_NEW_DOORS_RANGE)
+    if n_range is None:
+        n_range = world.preset.n_new_doors_range
+    n = rng.randint(*n_range)
     for side in available[:n]:
         _place_doorway_on_wall(world, rx0, ry0, w, h, side, rng)
+
+
+def _pick_room_special(world, op):
+    """Decide if a room past `op` should be promoted to a special type, and
+    if so which. Uses a per-opening RNG separate from the resolution RNG so
+    the choice is stable regardless of how many placement attempts ran."""
+    rng = random.Random(hash((world.seed, op.x, op.y, op.dx, op.dy, "special")))
+    if rng.random() >= SPECIAL_ROOM_CHANCE:
+        return None
+    keys = list(SPECIAL_ROOM_TYPE_WEIGHTS.keys())
+    weights = [SPECIAL_ROOM_TYPE_WEIGHTS[k] for k in keys]
+    return rng.choices(keys, weights=weights, k=1)[0]
 
 
 def _incoming_side_from_op(op):
@@ -308,26 +442,57 @@ def place_hall_segment(world, sx, sy, dx, dy, perp_x, perp_y, length):
 
 # --- Behaviors ---
 
-def _try_place_room_past_door(world, op, rng):
-    door_cells = {(op.x, op.y), (op.x + op.perp_x, op.y + op.perp_y)}
-    incoming_side = _incoming_side_from_op(op)
+def _resolve_into_room(world, op, rng, *, door_cells, incoming_side, layout_op=None):
+    """Shared room-placement: decide special type, sample size + door count
+    accordingly, place the room, mark special floors / secret doors, and
+    do chest rolls. layout_op overrides which opening is used to compute
+    the room's top-left (matters when a HALL_OPEN synthesizes a door)."""
+    layout_op = layout_op or op
+    special = _pick_room_special(world, op)
+    if special:
+        size_range = SPECIAL_ROOM_PROFILES[special]["size_range"]
+        n_doors_range = SPECIAL_ROOM_PROFILES[special]["n_doors_range"]
+    else:
+        size_range = world.preset.room_size_range
+        n_doors_range = world.preset.n_new_doors_range
+
     for _ in range(MAX_PLACEMENT_ATTEMPTS):
-        w = rng.randint(*ROOM_SIZE_RANGE)
-        h = rng.randint(*ROOM_SIZE_RANGE)
+        w = rng.randint(*size_range)
+        h = rng.randint(*size_range)
         try:
-            rx0, ry0 = _room_topleft_for_door(op, w, h, rng)
+            rx0, ry0 = _room_topleft_for_door(layout_op, w, h, rng)
         except ValueError:
             continue
         if place_room(world, rx0, ry0, w, h, door_cells):
-            _add_room_doorways(world, rx0, ry0, w, h, incoming_side, rng)
+            _add_room_doorways(world, rx0, ry0, w, h, incoming_side, rng,
+                               n_range=n_doors_range)
+            _maybe_place_chests_in_room(world, rx0, ry0, w, h,
+                                         _chest_rng(world, op),
+                                         special=special)
+            if special:
+                for x in range(rx0, rx0 + w):
+                    for y in range(ry0, ry0 + h):
+                        if world.cells.get((x, y)) == CellKind.ROOM_FLOOR:
+                            world.special_floors[(x, y)] = special
+            if special == "secret":
+                for c in door_cells:
+                    world.secret_doors.add(c)
             return True
     return False
+
+
+def _try_place_room_past_door(world, op, rng):
+    door_cells = {(op.x, op.y), (op.x + op.perp_x, op.y + op.perp_y)}
+    incoming_side = _incoming_side_from_op(op)
+    return _resolve_into_room(world, op, rng,
+                              door_cells=door_cells,
+                              incoming_side=incoming_side)
 
 
 def _try_place_hall_past_door(world, op, rng):
     sx = op.x + op.dx
     sy = op.y + op.dy
-    target = rng.randint(*HALL_SEGMENT_LENGTH)
+    target = rng.randint(*world.preset.hall_segment_length)
     for length in range(target, 0, -1):
         end = place_hall_segment(world, sx, sy, op.dx, op.dy, op.perp_x, op.perp_y, length)
         if end is not None:
@@ -341,7 +506,7 @@ def _try_place_hall_past_door(world, op, rng):
 
 
 def _try_extend_hall_straight(world, op, rng):
-    target = rng.randint(*HALL_SEGMENT_LENGTH)
+    target = rng.randint(*world.preset.hall_segment_length)
     for length in range(target, 0, -1):
         end = place_hall_segment(world, op.x, op.y, op.dx, op.dy, op.perp_x, op.perp_y, length)
         if end is not None:
@@ -361,17 +526,10 @@ def _try_open_into_room(world, op, rng):
         dx=op.dx, dy=op.dy, perp_x=op.perp_x, perp_y=op.perp_y,
     )
     incoming_side = _incoming_side_from_op(door_op_synth)
-    for _ in range(MAX_PLACEMENT_ATTEMPTS):
-        w = rng.randint(*ROOM_SIZE_RANGE)
-        h = rng.randint(*ROOM_SIZE_RANGE)
-        try:
-            rx0, ry0 = _room_topleft_for_door(door_op_synth, w, h, rng)
-        except ValueError:
-            continue
-        if place_room(world, rx0, ry0, w, h, door_cells):
-            _add_room_doorways(world, rx0, ry0, w, h, incoming_side, rng)
-            return True
-    return False
+    return _resolve_into_room(world, op, rng,
+                              door_cells=door_cells,
+                              incoming_side=incoming_side,
+                              layout_op=door_op_synth)
 
 
 def _try_place_junction(world, op, rng):
@@ -394,8 +552,8 @@ def _try_place_junction(world, op, rng):
     ]
     sides = ["forward", "right", "left"]
     n_exits = rng.choices(
-        list(JUNCTION_EXIT_COUNT_WEIGHTS.keys()),
-        weights=list(JUNCTION_EXIT_COUNT_WEIGHTS.values()),
+        list(world.preset.junction_exit_count_weights.keys()),
+        weights=list(world.preset.junction_exit_count_weights.values()),
         k=1,
     )[0]
     rng.shuffle(sides)
@@ -487,6 +645,8 @@ def _block_opening(world, op):
     else:
         for c in op.cells():
             _commit_wall_if_empty(world, c)
+        # Dead-end hall: roll for a chest at the last floor cells
+        _maybe_place_chest_in_dead_end(world, op, _chest_rng(world, op))
 
 
 def resolve_opening(world, op):
@@ -501,13 +661,13 @@ def resolve_opening(world, op):
         return
     rng = _opening_rng(world, op)
     if op.kind == OpeningKind.DOOR:
-        choice = _weighted_pick(rng, DOOR_BEHAVIOR_WEIGHTS)
+        choice = _weighted_pick(rng, world.preset.door_behavior_weights)
         if choice == "room":
             ok = _try_place_room_past_door(world, op, rng)
         else:
             ok = _try_place_hall_past_door(world, op, rng)
     else:
-        choice = _weighted_pick(rng, HALL_BEHAVIOR_WEIGHTS)
+        choice = _weighted_pick(rng, world.preset.hall_behavior_weights)
         if choice == "straight":
             ok = _try_extend_hall_straight(world, op, rng)
         elif choice == "room":
@@ -657,10 +817,112 @@ def dm_open_door(world, op):
     reveal_around(world, op.x, op.y, depth=1)
 
 
+# --- Chests ---
+
+def _facing_from_dir(dx, dy):
+    if dy < 0:
+        return "north"
+    if dy > 0:
+        return "south"
+    if dx < 0:
+        return "west"
+    return "east"
+
+
+def _chest_candidates_in_room(world, rx0, ry0, w, h):
+    """Perimeter floor cells of a room paired with a facing direction (away
+    from the wall they're against). Cells whose adjacent wall is a door are
+    skipped so we don't put a chest right where someone would walk in.
+    Corner cells appear twice (once per touching wall), which is fine — the
+    rng picks one of the two orientations."""
+    candidates = []
+    # Top inner row -> against north wall, opens south
+    for i in range(w):
+        cell = (rx0 + i, ry0)
+        if world.cells.get((cell[0], cell[1] - 1)) != CellKind.DOOR:
+            candidates.append((cell, "south"))
+    # Bottom inner row -> against south wall, opens north
+    for i in range(w):
+        cell = (rx0 + i, ry0 + h - 1)
+        if world.cells.get((cell[0], cell[1] + 1)) != CellKind.DOOR:
+            candidates.append((cell, "north"))
+    # Left inner col -> against west wall, opens east
+    for j in range(h):
+        cell = (rx0, ry0 + j)
+        if world.cells.get((cell[0] - 1, cell[1])) != CellKind.DOOR:
+            candidates.append((cell, "east"))
+    # Right inner col -> against east wall, opens west
+    for j in range(h):
+        cell = (rx0 + w - 1, ry0 + j)
+        if world.cells.get((cell[0] + 1, cell[1])) != CellKind.DOOR:
+            candidates.append((cell, "west"))
+    return candidates
+
+
+def _maybe_place_chests_in_room(world, rx0, ry0, w, h, rng, *, special=None):
+    """Place chests in the room.
+
+    Normal rooms: 0–2 chests via two independent rolls at preset.chest_chance.
+    Special rooms (boss/treasure/secret): use the per-type min/max from
+    SPECIAL_ROOM_PROFILES. min_chests are guaranteed; (max - min) optional
+    rolls run at preset.chest_chance. Chests sit on perimeter floor cells
+    not adjacent to a door; same cell can't be picked twice."""
+    candidates = _chest_candidates_in_room(world, rx0, ry0, w, h)
+    if not candidates:
+        return
+
+    if special and special in SPECIAL_ROOM_PROFILES:
+        prof = SPECIAL_ROOM_PROFILES[special]
+        min_c = prof.get("min_chests", 0)
+        max_c = prof.get("max_chests", 2)
+    else:
+        min_c, max_c = 0, 2
+
+    def _place():
+        nonlocal candidates
+        cell, facing = rng.choice(candidates)
+        world.chests[cell] = facing
+        candidates = [(c, f) for (c, f) in candidates if c != cell]
+
+    for _ in range(min_c):
+        if not candidates:
+            return
+        _place()
+    for _ in range(max(0, max_c - min_c)):
+        if not candidates:
+            return
+        if rng.random() >= world.preset.chest_chance:
+            continue
+        _place()
+
+
+def _maybe_place_chest_in_dead_end(world, op, rng):
+    """Hall just got blocked; the cells one step back from op's front are
+    the last hall floor before the cap. Chance for a chest there, facing
+    back into the hall."""
+    if rng.random() >= world.preset.chest_chance:
+        return
+    last_a = (op.x - op.dx, op.y - op.dy)
+    last_b = (op.x - op.dx + op.perp_x, op.y - op.dy + op.perp_y)
+    candidates = [c for c in (last_a, last_b)
+                  if world.cells.get(c) == CellKind.HALL_FLOOR]
+    if not candidates:
+        return
+    cell = rng.choice(candidates)
+    world.chests[cell] = _facing_from_dir(-op.dx, -op.dy)
+
+
+def _chest_rng(world, op):
+    """Deterministic chest RNG keyed on the opening identity, separate from
+    the resolution RNG so chest rolls don't depend on which placement
+    attempts succeeded first."""
+    return random.Random(hash((world.seed, op.x, op.y, op.dx, op.dy, "chest")))
+
+
 # --- Spawn ---
 
 def init_spawn(world):
-    w, h = SPAWN_ROOM_SIZE
+    w, h = world.preset.spawn_room_size
     rx0 = -(w // 2)
     ry0 = -(h // 2)
     place_room(world, rx0, ry0, w, h, set())
@@ -673,9 +935,13 @@ def init_spawn(world):
                 world.revealed.add((x, y))
 
 
-def make_world(seed: int) -> World:
-    """Build a fresh world with spawn room baked in.  Returns the World."""
-    w = World(seed=seed)
+def make_world(seed: int, preset_name: str = "generic") -> World:
+    """Build a fresh world with spawn room baked in.
+
+    preset_name picks a Preset (see PRESETS); unknown names fall back to
+    generic so older callers don't break.
+    """
+    w = World(seed=seed, preset=get_preset(preset_name))
     init_spawn(w)
     return w
 
@@ -689,6 +955,9 @@ def world_to_wire(world: World, origin_x: int, origin_y: int) -> dict:
     cells: dict "col,row" -> kind (in dicecloud's positive grid)
     revealed: list of "col,row" strings
     openings: list with x/y already translated
+    chests: dict "col,row" -> facing direction
+    spawn_marker: list of "col,row" strings (center 2x2 of the spawn room,
+        rendered with a distinct tint so players know which room is the start)
     """
     cells = {}
     for (x, y), k in world.cells.items():
@@ -704,4 +973,32 @@ def world_to_wire(world: World, origin_x: int, origin_y: int) -> dict:
         }
         for o in world.openings
     ]
-    return {"cells": cells, "openings": openings, "revealed": revealed}
+    chests = {
+        f"{x + origin_x},{y + origin_y}": facing
+        for (x, y), facing in world.chests.items()
+    }
+    chests_opened = [
+        f"{x + origin_x},{y + origin_y}" for (x, y) in world.opened_chests
+    ]
+    special_floors = {
+        f"{x + origin_x},{y + origin_y}": kind
+        for (x, y), kind in world.special_floors.items()
+    }
+    secret_doors = [
+        f"{x + origin_x},{y + origin_y}" for (x, y) in world.secret_doors
+    ]
+    # Center 2x2 of the spawn room (works for both even-sized presets we ship)
+    spawn_marker = []
+    for sx, sy in ((-1, -1), (-1, 0), (0, -1), (0, 0)):
+        if world.cells.get((sx, sy)) == CellKind.ROOM_FLOOR:
+            spawn_marker.append(f"{sx + origin_x},{sy + origin_y}")
+    return {
+        "cells": cells,
+        "openings": openings,
+        "revealed": revealed,
+        "chests": chests,
+        "chests_opened": chests_opened,
+        "special_floors": special_floors,
+        "secret_doors": secret_doors,
+        "spawn_marker": spawn_marker,
+    }

@@ -2,7 +2,20 @@
 
 const GRID = 50; // px per cell
 
-let stage, imageLayer, gridLayer, fogLayer, tokenLayer, selectionLayer, rulerLayer, pingLayer, spellLayer;
+// Cell colors for procedural maps (mirrors infinite_dungeon's palette)
+const CELL_COLORS = {
+  wall:        "#3a3a3e",
+  room_floor:  "#8a8a8e",
+  hall_floor:  "#636365",
+  door:        "#8b4513",
+  door_closed: "#5a3210",
+};
+
+let stage, imageLayer, gridLayer, fogLayer, tokenLayer, selectionLayer, rulerLayer, pingLayer, spellLayer, cellLayer;
+// Bounding box of procedural cells in cell coords, or null when no procedural
+// map is active. renderFog reads this to extend the fog overlay past the
+// fixed cols/rows grid so a dungeon that grew off-grid still gets fogged.
+let proceduralBounds = null;
 let selectedTokenId = null;          // primary selected token (single-click or HP editor)
 let selectedTokenIds = new Set();    // all currently selected tokens
 const tokenNodes = {}; // token_id -> Konva.Group
@@ -52,6 +65,7 @@ function initMap(cols, rows) {
     spellHandleNode = null;
     selectedTokenId = null;
     mapImageNode = null;
+    cellLayer = null;
     fogDragStart = null;
     fogDragRect = null;
   }
@@ -68,6 +82,7 @@ function initMap(cols, rows) {
 
   imageLayer = new Konva.Layer();
   gridLayer = new Konva.Layer();
+  cellLayer  = new Konva.Layer({ listening: false });  // procedural cells, painted over gridLayer
   spellLayer = new Konva.Layer({ listening: false });
   tokenLayer = new Konva.Layer();
   fogLayer   = new Konva.Layer({ listening: false });
@@ -76,6 +91,7 @@ function initMap(cols, rows) {
   pingLayer      = new Konva.Layer({ listening: false });
   stage.add(imageLayer);
   stage.add(gridLayer);
+  stage.add(cellLayer);
   stage.add(spellLayer);
   stage.add(tokenLayer);
   stage.add(fogLayer);
@@ -278,6 +294,77 @@ function resetMapView() {
   stage.scale({ x: 1, y: 1 });
   stage.batchDraw();
 }
+
+// Render the procedural dungeon's cells from a payload sent by the server.
+// payload = { cells: { "col,row": kind, ... }, openings: [...], origin_x, origin_y, ... }
+// Pass null/undefined to clear.
+//
+// Uses a single Konva.Shape with a custom sceneFunc instead of one
+// Konva.Rect per cell. Cells are grouped by color so we set fillStyle
+// once per color and emit raw ctx.fillRect calls. With thousands of
+// generated cells this runs in milliseconds — the per-Rect-node version
+// stalled visibly on every reveal.
+function renderProceduralCells(payload) {
+  if (!cellLayer) return;
+  cellLayer.destroyChildren();
+  if (!payload || !payload.cells) {
+    proceduralBounds = null;
+    cellLayer.batchDraw();
+    return;
+  }
+
+  // Track the bbox so fog rendering can cover cells past the fixed grid.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+  const sealedDoorCells = new Set();
+  for (const op of (payload.openings || [])) {
+    if (op.kind !== "door" || op.state !== "sealed") continue;
+    sealedDoorCells.add(`${op.x},${op.y}`);
+    sealedDoorCells.add(`${op.x + (op.perp_x || 0)},${op.y + (op.perp_y || 0)}`);
+  }
+
+  // Bucket cell keys by color so the renderer sets fillStyle once per group.
+  // Track bbox in the same pass so we don't iterate twice.
+  const byColor = new Map();
+  for (const [key, kind] of Object.entries(payload.cells)) {
+    const i = key.indexOf(",");
+    const c = +key.slice(0, i);
+    const r = +key.slice(i + 1);
+    if (c < minX) minX = c;
+    if (c > maxX) maxX = c;
+    if (r < minY) minY = r;
+    if (r > maxY) maxY = r;
+    let color = CELL_COLORS[kind] || CELL_COLORS.wall;
+    if (kind === "door" && sealedDoorCells.has(key)) {
+      color = CELL_COLORS.door_closed;
+    }
+    let bucket = byColor.get(color);
+    if (!bucket) { bucket = []; byColor.set(color, bucket); }
+    bucket.push(key);
+  }
+  proceduralBounds = (minX !== Infinity)
+    ? { minX, minY, maxX, maxY }
+    : null;
+
+  const cellShape = new Konva.Shape({
+    listening: false,
+    sceneFunc: (ctx) => {
+      for (const [color, keys] of byColor) {
+        ctx.fillStyle = color;
+        for (const key of keys) {
+          const i = key.indexOf(",");
+          if (i < 0) continue;
+          const c = +key.slice(0, i);
+          const r = +key.slice(i + 1);
+          ctx.fillRect(c * GRID, r * GRID, GRID, GRID);
+        }
+      }
+    },
+  });
+  cellLayer.add(cellShape);
+  cellLayer.batchDraw();
+}
+window.renderProceduralCells = renderProceduralCells;
 
 function drawGrid(cols, rows) {
   gridLayer.destroyChildren();
@@ -1366,22 +1453,51 @@ function renderConditionIcons(group, token, radius) {
 
 // --- Fog of War ---
 
+// Render fog as a single Konva.Shape: fill the whole grid with the fog color,
+// then "punch holes" in the revealed cells via destination-out compositing.
+// O(revealed) draw calls instead of O(cols*rows), and one Konva node total —
+// scales fine to large procedural maps where the old per-cell-rect approach
+// melted at ~40k nodes.
 function renderFog(fogSet, isDM) {
   if (!fogLayer) return;
   fogLayer.destroyChildren();
-  const fill = isDM ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,1)";
-  for (let r = 0; r < currentRows; r++) {
-    for (let c = 0; c < currentCols; c++) {
-      if (!fogSet.has(`${c},${r}`)) {
-        fogLayer.add(new Konva.Rect({
-          x: c * GRID, y: r * GRID,
-          width: GRID, height: GRID,
-          fill,
-          listening: false,
-        }));
-      }
-    }
+  const opacity = isDM ? 0.55 : 1;
+
+  // Default fog rect = the dicecloud grid (0..cols, 0..rows). For procedural
+  // maps, expand to also cover the bbox of generated cells so a dungeon
+  // that grew past the fixed grid still gets fogged. PAD avoids hairline
+  // gaps at the edge of the bbox.
+  const PAD = 2;
+  let minC = 0, minR = 0;
+  let maxC = currentCols, maxR = currentRows;
+  if (proceduralBounds) {
+    if (proceduralBounds.minX - PAD < minC) minC = proceduralBounds.minX - PAD;
+    if (proceduralBounds.minY - PAD < minR) minR = proceduralBounds.minY - PAD;
+    if (proceduralBounds.maxX + 1 + PAD > maxC) maxC = proceduralBounds.maxX + 1 + PAD;
+    if (proceduralBounds.maxY + 1 + PAD > maxR) maxR = proceduralBounds.maxY + 1 + PAD;
   }
+  const x0 = minC * GRID, y0 = minR * GRID;
+  const w = (maxC - minC) * GRID, h = (maxR - minR) * GRID;
+
+  const fogShape = new Konva.Shape({
+    listening: false,
+    sceneFunc: (ctx) => {
+      ctx.save();
+      ctx.fillStyle = `rgba(0,0,0,${opacity})`;
+      ctx.fillRect(x0, y0, w, h);
+      ctx.globalCompositeOperation = "destination-out";
+      for (const key of fogSet) {
+        const i = key.indexOf(",");
+        if (i < 0) continue;
+        const c = +key.slice(0, i);
+        const r = +key.slice(i + 1);
+        // Cutouts outside the fog rect are no-ops on canvas; no need to clip.
+        ctx.fillRect(c * GRID, r * GRID, GRID, GRID);
+      }
+      ctx.restore();
+    },
+  });
+  fogLayer.add(fogShape);
   fogLayer.batchDraw();
 }
 window.renderFog = renderFog;

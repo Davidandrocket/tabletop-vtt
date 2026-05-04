@@ -179,6 +179,11 @@
               <input id="profile-name-input" type="text" placeholder="Profile name" maxlength="50" class="profile-name-input">
               <button class="btn-sm btn-green" onclick="saveMapProfile()">Save Current</button>
             </div>
+            <div class="map-profiles-save" style="margin-top:6px;">
+              <input id="procedural-name-input" type="text" placeholder="Dungeon name" maxlength="50" class="profile-name-input" style="flex:1 1 auto;">
+              <input id="procedural-seed-input" type="number" placeholder="Seed" class="profile-name-input" style="width:90px;flex:0 0 90px;" title="Leave blank for a random seed">
+              <button class="btn-sm" style="background:#4a90d9;color:#fff;" onclick="createProceduralProfile()" title="Generate a new procedural dungeon as a map profile">New Procedural Dungeon</button>
+            </div>
           </details>
         </div>
         <div class="map-profiles-section">

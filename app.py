@@ -16,6 +16,8 @@ from flask import Flask, render_template, request, session, redirect, url_for
 from flask_socketio import SocketIO, join_room, emit
 from dotenv import load_dotenv
 
+import dungeon_gen
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -23,9 +25,47 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 DICECLOUD_BASE = "https://dicecloud.com/api"
-DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "sessions.db"))
-UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", os.path.join(os.path.dirname(__file__), "static", "uploads"))
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+
+
+_PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+_IS_RENDER = os.environ.get("RENDER") == "true"
+
+
+def _path_inside_project(path):
+    try:
+        return os.path.commonpath([os.path.abspath(path), _PROJECT_DIR]) == _PROJECT_DIR
+    except ValueError:
+        # Different drives on Windows -> not inside project
+        return False
+
+
+def _resolve_path(env_value, default, *, is_directory):
+    """Pick a usable path. Honor env_value when running on Render or when it
+    points inside the project; otherwise fall back to the project-local
+    default. Avoids cases like a Render persistent-disk path
+    (`/static/uploads/...`) accidentally creating `C:\\static\\uploads\\` on a
+    local Windows machine."""
+    use_env = env_value and (_IS_RENDER or _path_inside_project(env_value))
+    chosen = env_value if use_env else default
+    target_dir = chosen if is_directory else (os.path.dirname(chosen) or ".")
+    os.makedirs(target_dir, exist_ok=True)
+    if env_value and chosen != env_value:
+        print(f"[dicecloud] ignoring env path {env_value!r} (not on Render and "
+              f"not inside the project); using {chosen!r}.")
+    return chosen
+
+
+DB_PATH = _resolve_path(
+    os.environ.get("DB_PATH"),
+    os.path.join(_PROJECT_DIR, "sessions.db"),
+    is_directory=False,
+)
+UPLOAD_FOLDER = _resolve_path(
+    os.environ.get("UPLOAD_FOLDER"),
+    os.path.join(_PROJECT_DIR, "static", "uploads"),
+    is_directory=True,
+)
 
 # --- In-memory state (ephemeral per-connection data only) ---
 sessions = {}       # code -> session data
@@ -120,7 +160,12 @@ def init_db():
         """)
 
         for col, defn in [
-            ("fog", "TEXT DEFAULT '[]'"),
+            ("fog",              "TEXT DEFAULT '[]'"),
+            ("kind",             "TEXT DEFAULT 'image'"),
+            ("seed",             "INTEGER"),
+            ("procedural_state", "TEXT"),
+            ("origin_x",         "INTEGER DEFAULT 0"),
+            ("origin_y",         "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE map_profiles ADD COLUMN {col} {defn}")
@@ -300,8 +345,160 @@ def db_load_session(code):
         "spell_shapes": {},
         "active_profile_id": row["active_profile_id"],
         "fog": {(int(c[0]), int(c[1])) for c in json.loads(row["fog"] or "[]")},
+        "procedural": None,  # filled below if the active profile is procedural
     }
+    _hydrate_procedural_from_active_profile(code)
     return True
+
+
+def _hydrate_procedural_from_active_profile(code):
+    """If the session's active map profile is procedural, deserialize its
+    World into sess['procedural'] and sync sess['fog'] from world.revealed.
+    Otherwise leaves procedural as None and fog untouched."""
+    sess = sessions.get(code)
+    if not sess:
+        return
+    profile_id = sess.get("active_profile_id")
+    if profile_id is None:
+        sess["procedural"] = None
+        return
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT kind, procedural_state, origin_x, origin_y FROM map_profiles WHERE id = ?",
+            (int(profile_id),)
+        ).fetchone()
+    if not row or row["kind"] != "procedural" or not row["procedural_state"]:
+        sess["procedural"] = None
+        return
+    try:
+        state = json.loads(row["procedural_state"])
+    except (TypeError, ValueError):
+        sess["procedural"] = None
+        return
+    world = dungeon_gen.World.from_dict(state)
+    sess["procedural"] = {
+        "world": world,
+        "origin_x": int(row["origin_x"] or 0),
+        "origin_y": int(row["origin_y"] or 0),
+    }
+    # Procedural reveal is authoritative for fog on procedural maps
+    _sync_fog_from_procedural(sess)
+
+
+def _procedural_payload(sess):
+    """Build the wire-format payload describing the current procedural map,
+    or None if the session isn't on a procedural profile."""
+    p = sess.get("procedural")
+    if not p:
+        return None
+    wire = dungeon_gen.world_to_wire(p["world"], p["origin_x"], p["origin_y"])
+    return {
+        "origin_x": p["origin_x"],
+        "origin_y": p["origin_y"],
+        **wire,
+    }
+
+
+def _persist_procedural_state(profile_id, world):
+    """Write the World back to the profile row (foreground)."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE map_profiles SET procedural_state = ? WHERE id = ?",
+            (json.dumps(world.to_dict()), int(profile_id)),
+        )
+
+
+def _persist_procedural_state_json_async(profile_id, state_json):
+    """Background-task version: caller has already serialized world.to_dict()
+    to a JSON string, so we don't capture a mutable World reference (which
+    would race with subsequent ticks). Just writes the string to disk."""
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE map_profiles SET procedural_state = ? WHERE id = ?",
+                (state_json, int(profile_id)),
+            )
+    except Exception as e:  # noqa: BLE001
+        print(f"[dicecloud] async procedural persist error: {e}")
+
+
+def _procedural_token_positions(sess, *, players_only=False):
+    """Translate every token's position from dicecloud (col, row) to
+    procedural world (x, y) by subtracting the active map's origin offset.
+
+    When players_only=True, restrict to is_player tokens only. Used for fog
+    reveal so monster/NPC tokens don't expose the map for the players.
+    """
+    p = sess.get("procedural")
+    if not p:
+        return []
+    ox, oy = p["origin_x"], p["origin_y"]
+    out = []
+    for t in sess["tokens"].values():
+        if players_only and not t.get("is_player"):
+            continue
+        out.append((int(t["x"]) - ox, int(t["y"]) - oy))
+    return out
+
+
+def _sync_fog_from_procedural(sess):
+    """Pipe the procedural World's revealed-set into dicecloud's fog system.
+    dicecloud treats `sess['fog']` as the set of *revealed* cells; the
+    renderFog function on the client dims unrevealed cells (semi-transparent
+    for the DM, fully opaque for players) so the existing fog UI Just Works
+    once fed the right set."""
+    p = sess.get("procedural")
+    if not p:
+        return
+    ox, oy = p["origin_x"], p["origin_y"]
+    sess["fog"] = {(x + ox, y + oy) for (x, y) in p["world"].revealed}
+
+
+def _fog_payload(sess):
+    return [list(c) for c in sess.get("fog", set())]
+
+
+def _tick_and_broadcast_procedural(code):
+    """Run streaming generation around current token positions. If anything
+    new gets generated (or fog reveals change), persist the World and
+    broadcast the updated procedural state to the room.
+
+    Cheap when nothing's near a sealed opening: tick and update_fog both
+    short-circuit on Manhattan distance.
+    """
+    sess = sessions.get(code)
+    if not sess or not sess.get("procedural"):
+        return
+    p = sess["procedural"]
+    world = p["world"]
+    gen_positions = _procedural_token_positions(sess)
+    reveal_positions = _procedural_token_positions(sess, players_only=True)
+    if not gen_positions:
+        return
+
+    cells_before = len(world.cells)
+    revealed_before = len(world.revealed)
+    dungeon_gen.tick(world, gen_positions)
+    dungeon_gen.update_fog(world, reveal_positions)
+    if (len(world.cells) == cells_before
+            and len(world.revealed) == revealed_before):
+        return  # no change worth broadcasting
+
+    _sync_fog_from_procedural(sess)
+
+    # Snapshot the world state synchronously (so a follow-up tick can't
+    # mutate it under us), then write to disk in a background green thread
+    # so the broadcast doesn't wait on SQLite. The session row's `fog` is
+    # NOT persisted here — it's re-derived from world.revealed on every
+    # load, so saving it again per tick was a redundant write.
+    profile_id = sess["active_profile_id"]
+    state_json = json.dumps(world.to_dict())
+    socketio.start_background_task(
+        _persist_procedural_state_json_async, profile_id, state_json
+    )
+
+    socketio.emit("procedural_state", {"data": _procedural_payload(sess)}, room=code)
+    socketio.emit("fog_updated", {"fog": _fog_payload(sess)}, room=code)
 
 
 def db_load_library():
@@ -621,6 +818,7 @@ def on_connect():
         "current_turn": sess["current_turn"],
         "current_round": sess.get("current_round", 0),
         "map": sess["map"],
+        "procedural": _procedural_payload(sess),
         "players": {sid: {"name": p["name"], "uuid": p.get("player_uuid")} for sid, p in sess["players"].items()},
         "chat": sess["chat"][-50:],
         "my_sid": request.sid,
@@ -760,6 +958,7 @@ def on_add_token(data):
     sess["tokens"][token["id"]] = token
     db_upsert_token(token, code)
     emit_token_to_room("token_added", token, sess)
+    _tick_and_broadcast_procedural(code)
 
 
 @socketio.on("remove_token")
@@ -796,6 +995,7 @@ def on_move_token(data):
     token["y"] = int(data.get("y", token["y"]))
     db_upsert_token(token, code)
     emit("token_moved", {"id": tid, "x": token["x"], "y": token["y"]}, room=code)
+    _tick_and_broadcast_procedural(code)
 
 
 @socketio.on("update_hp")
@@ -1155,6 +1355,7 @@ def on_load_map_profile(data):
         return
 
     fog_raw = json.loads(row["fog"] or "[]")
+    kind = row["kind"] or "image"
     sess["map"]["image_url"] = row["image_url"]
     sess["map"]["offset_x"]  = row["offset_x"]
     sess["map"]["offset_y"]  = row["offset_y"]
@@ -1166,6 +1367,22 @@ def on_load_map_profile(data):
     sess["spell_shapes"] = {}
     sess["fog"] = {(int(c[0]), int(c[1])) for c in fog_raw}
 
+    if kind == "procedural" and row["procedural_state"]:
+        try:
+            state = json.loads(row["procedural_state"])
+            world = dungeon_gen.World.from_dict(state)
+            sess["procedural"] = {
+                "world": world,
+                "origin_x": int(row["origin_x"] or 0),
+                "origin_y": int(row["origin_y"] or 0),
+            }
+            # Procedural reveal authoritatively drives the fog set
+            _sync_fog_from_procedural(sess)
+        except (TypeError, ValueError):
+            sess["procedural"] = None
+    else:
+        sess["procedural"] = None
+
     db_save_session(code)
     emit("map_resized", {"cols": row["cols"], "rows": row["rows"]}, room=code)
     emit("map_image_updated", {
@@ -1176,10 +1393,81 @@ def on_load_map_profile(data):
         "scale_y": row["scale_y"],
     }, room=code)
     emit("spell_shapes_cleared", {}, room=code)
-    emit("fog_updated", {"fog": fog_raw}, room=code)
+    emit("fog_updated", {"fog": _fog_payload(sess)}, room=code)
+    emit("procedural_state", {"data": _procedural_payload(sess)}, room=code)
     emit("map_profiles_updated", {
         "profiles": db_load_profiles(code),
         "active_profile_id": row["id"],
+    }, room=code)
+
+
+@socketio.on("create_procedural_profile")
+def on_create_procedural_profile(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+
+    name = str(data.get("name", "Procedural Dungeon")).strip()[:50] or "Procedural Dungeon"
+    seed_in = data.get("seed")
+    try:
+        seed = int(seed_in) if seed_in not in (None, "", "null") else random.randint(0, 2**31 - 1)
+    except (TypeError, ValueError):
+        seed = random.randint(0, 2**31 - 1)
+
+    # Default grid is large enough that typical play won't run off the
+    # edges; only a fraction is used per dungeon, the rest stays as void.
+    cols = int(data.get("cols") or 200)
+    rows = int(data.get("rows") or 200)
+    origin_x = cols // 2
+    origin_y = rows // 2
+
+    world = dungeon_gen.make_world(seed)
+
+    with get_db() as conn:
+        cursor = conn.execute("""
+            INSERT INTO map_profiles
+                (session_code, name, image_url, offset_x, offset_y, scale_x, scale_y,
+                 cols, rows, fog, kind, seed, procedural_state, origin_x, origin_y)
+            VALUES (?, ?, NULL, 0, 0, 1, 1, ?, ?, '[]', 'procedural', ?, ?, ?, ?)
+        """, (
+            code, name, cols, rows,
+            seed, json.dumps(world.to_dict()), origin_x, origin_y,
+        ))
+        profile_id = cursor.lastrowid
+
+    # Activate immediately, mirroring load_map_profile
+    sess["map"]["image_url"] = None
+    sess["map"]["offset_x"]  = 0
+    sess["map"]["offset_y"]  = 0
+    sess["map"]["scale_x"]   = 1
+    sess["map"]["scale_y"]   = 1
+    sess["map"]["cols"]      = cols
+    sess["map"]["rows"]      = rows
+    sess["active_profile_id"] = profile_id
+    sess["spell_shapes"]      = {}
+    sess["fog"]               = set()
+    sess["procedural"] = {
+        "world": world,
+        "origin_x": origin_x,
+        "origin_y": origin_y,
+    }
+    _sync_fog_from_procedural(sess)
+    db_save_session(code)
+
+    emit("map_resized", {"cols": cols, "rows": rows}, room=code)
+    emit("map_image_updated", {
+        "url": None, "offset_x": 0, "offset_y": 0, "scale_x": 1, "scale_y": 1,
+    }, room=code)
+    emit("spell_shapes_cleared", {}, room=code)
+    emit("fog_updated", {"fog": _fog_payload(sess)}, room=code)
+    emit("procedural_state", {"data": _procedural_payload(sess)}, room=code)
+    emit("map_profiles_updated", {
+        "profiles": db_load_profiles(code),
+        "active_profile_id": profile_id,
     }, room=code)
 
 
@@ -1384,6 +1672,7 @@ def on_spawn_library_token(data):
     sess["tokens"][token["id"]] = token
     db_upsert_token(token, code)
     emit_token_to_room("token_added", token, sess)
+    _tick_and_broadcast_procedural(code)
 
 
 @socketio.on("roll_dice")
@@ -2351,4 +2640,7 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    socketio.run(app, host="0.0.0.0", port=port, debug=True)
+    # use_reloader=False: gevent's monkey-patching + Werkzeug's auto-reloader
+    # don't get along on Windows (the reloader child never binds the port).
+    # Render uses gunicorn, so this branch never runs in production anyway.
+    socketio.run(app, host="0.0.0.0", port=port, debug=True, use_reloader=False)

@@ -93,6 +93,8 @@ socket.on("session_state", (data) => {
   }
   syncMapOffsetInputs(map.offset_x || 0, map.offset_y || 0);
   toggleMapImageControls(!!map.image_url);
+  // Render procedural dungeon cells if the active profile is procedural
+  window.renderProceduralCells?.(data.procedural || null);
 
   // Load tokens
   sessionTokens = {};
@@ -172,6 +174,10 @@ socket.on("spell_shapes_cleared", ()     => { window.clearSpellShapesFromMap?.()
 socket.on("map_profiles_updated", (data) => {
   if (ROLE !== "dm") return;
   renderMapProfiles(data.profiles, data.active_profile_id ?? null);
+});
+
+socket.on("procedural_state", (msg) => {
+  window.renderProceduralCells?.(msg?.data || null);
 });
 
 socket.on("fog_updated", (data) => {
@@ -840,6 +846,22 @@ function loadMapProfile(id) {
 function deleteMapProfile(id) {
   socket.emit("delete_map_profile", { id });
 }
+
+function createProceduralProfile() {
+  const nameEl = document.getElementById("procedural-name-input");
+  const seedEl = document.getElementById("procedural-seed-input");
+  const name = (nameEl?.value || "").trim() || "Procedural Dungeon";
+  const seedRaw = (seedEl?.value || "").trim();
+  const payload = { name };
+  if (seedRaw) {
+    const n = Number(seedRaw);
+    if (Number.isFinite(n)) payload.seed = Math.trunc(n);
+  }
+  socket.emit("create_procedural_profile", payload);
+  if (nameEl) nameEl.value = "";
+  if (seedEl) seedEl.value = "";
+}
+window.createProceduralProfile = createProceduralProfile;
 
 function fogRevealAll() {
   socket.emit("fog_reset", { mode: "all_revealed" });

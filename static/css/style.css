@@ -991,16 +991,17 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 }
 .init-input-row input { width: 60px; margin: 0; }
 .init-input-row span { flex: 1; }
-.init-include {
+.modal-box label.init-include {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 8px;
   width: 100%;
   cursor: pointer;
 }
-.init-include input[type="checkbox"] { margin: 0; width: auto; }
-.init-include .init-name-label { flex: 1; }
-.init-include input[type="number"] { width: 60px; margin: 0; }
+.init-include input[type="checkbox"] { margin: 0; width: auto; flex: 0 0 auto; }
+.init-include .init-name-label { flex: 1; color: var(--text); }
+.init-include input[type="number"] { width: 60px; margin: 0; flex: 0 0 60px; }
 
 .init-add-row {
   display: flex;

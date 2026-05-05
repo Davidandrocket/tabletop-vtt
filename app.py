@@ -1105,8 +1105,10 @@ def on_start_combat(data=None):
             if tid in sess["tokens"]:
                 sess["tokens"][tid]["initiative"] = int(initiative)
                 db_upsert_token(sess["tokens"][tid], code)
+    excluded = set(data.get("excluded", []) if data else [])
+    candidates = [tid for tid in sess["tokens"].keys() if tid not in excluded]
     ordered = sorted(
-        sess["tokens"].keys(),
+        candidates,
         key=lambda tid: sess["tokens"][tid]["initiative"],
         reverse=True,
     )
@@ -1120,6 +1122,101 @@ def on_start_combat(data=None):
         "current_round": sess["current_round"],
         "tokens": list(sess["tokens"].values()),
     }, room=code)
+
+
+def _broadcast_initiative_changed(sess, code):
+    """Broadcast a generic initiative_changed event with order + turn + round."""
+    db_save_session(code)
+    emit("initiative_changed", {
+        "order": sess["initiative_order"],
+        "current_turn": sess["current_turn"],
+        "current_round": sess.get("current_round", 0),
+    }, room=code)
+
+
+@socketio.on("initiative_add")
+def on_initiative_add(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions[code]
+    tid = data.get("token_id")
+    if not tid or tid not in sess["tokens"]:
+        return
+    if tid in sess["initiative_order"]:
+        return  # already in order
+    try:
+        new_init = int(data.get("initiative", 0))
+    except (TypeError, ValueError):
+        new_init = 0
+    sess["tokens"][tid]["initiative"] = new_init
+    db_upsert_token(sess["tokens"][tid], code)
+
+    # Insert in initiative-sorted position (descending). If the new entry lands
+    # at or before the active position, the active token's index shifts by 1.
+    order = sess["initiative_order"]
+    insert_at = len(order)
+    for i, other_tid in enumerate(order):
+        if sess["tokens"][other_tid]["initiative"] < new_init:
+            insert_at = i
+            break
+    order.insert(insert_at, tid)
+    if sess["current_turn"] >= insert_at:
+        sess["current_turn"] += 1
+    _broadcast_initiative_changed(sess, code)
+
+
+@socketio.on("initiative_remove")
+def on_initiative_remove(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions[code]
+    tid = data.get("token_id")
+    order = sess["initiative_order"]
+    if tid not in order:
+        return
+    idx = order.index(tid)
+    order.pop(idx)
+    cur = sess["current_turn"]
+    if not order:
+        sess["current_turn"] = -1
+        sess["current_round"] = 0
+    elif idx < cur:
+        sess["current_turn"] = cur - 1
+    elif idx == cur and cur >= len(order):
+        # Removed the last active entry — wrap to start, advance round
+        sess["current_turn"] = 0
+        sess["current_round"] = sess.get("current_round", 1) + 1
+    # else: removed an entry after current; current_turn unchanged
+    _broadcast_initiative_changed(sess, code)
+
+
+@socketio.on("initiative_move")
+def on_initiative_move(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions[code]
+    tid = data.get("token_id")
+    direction = data.get("direction")
+    order = sess["initiative_order"]
+    if tid not in order or direction not in ("up", "down"):
+        return
+    idx = order.index(tid)
+    swap_with = idx - 1 if direction == "up" else idx + 1
+    if swap_with < 0 or swap_with >= len(order):
+        return
+    order[idx], order[swap_with] = order[swap_with], order[idx]
+    # Keep active token highlighted by following the swap
+    if sess["current_turn"] == idx:
+        sess["current_turn"] = swap_with
+    elif sess["current_turn"] == swap_with:
+        sess["current_turn"] = idx
+    _broadcast_initiative_changed(sess, code)
 
 
 @socketio.on("next_turn")

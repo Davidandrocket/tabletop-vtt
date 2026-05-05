@@ -272,6 +272,7 @@
           </div>
           <div id="initiative-list" class="initiative-list"></div>
           {% if role == 'dm' %}
+          <button class="btn-sm init-add-btn" onclick="openInitiativeAdder()" title="Add a token to the initiative order">+ Add to Combat</button>
           <div id="initiative-inputs" class="initiative-inputs"></div>
           {% endif %}
         </div>
@@ -443,10 +444,22 @@
   <div id="initiative-modal" class="modal hidden">
     <div class="modal-box">
       <h3>Set Initiatives</h3>
+      <p class="modal-hint">Uncheck a token to leave it out of combat.</p>
       <div id="initiative-form"></div>
       <div class="modal-actions">
         <button class="btn-primary" onclick="submitInitiatives()">Start Combat</button>
         <button onclick="document.getElementById('initiative-modal').classList.add('hidden')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add to Combat Modal -->
+  <div id="init-add-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>Add to Combat</h3>
+      <div id="init-add-list"></div>
+      <div class="modal-actions">
+        <button onclick="document.getElementById('init-add-modal').classList.add('hidden')">Close</button>
       </div>
     </div>
   </div>

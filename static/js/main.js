@@ -282,6 +282,24 @@ socket.on("combat_ended", () => {
   setCombatButtonState(false);
 });
 
+socket.on("initiative_changed", (data) => {
+  initiativeOrder = data.order || [];
+  currentTurn = data.current_turn ?? -1;
+  if (data.current_round !== undefined) currentRound = data.current_round;
+  renderInitiative();
+  renderRoundTracker();
+  if (initiativeOrder.length === 0) {
+    highlightCurrentTurn(null);
+    updateTurnIndicator(null);
+    setCombatButtonState(false);
+  } else {
+    const activeId = initiativeOrder[currentTurn];
+    highlightCurrentTurn(activeId);
+    updateTurnIndicator(activeId);
+    setCombatButtonState(true);
+  }
+});
+
 socket.on("map_resized", (data) => {
   const colsEl = document.getElementById("grid-cols");
   const rowsEl = document.getElementById("grid-rows");
@@ -1113,7 +1131,9 @@ function startCombat() {
   for (const token of Object.values(sessionTokens)) {
     const row = document.createElement("div");
     row.className = "init-input-row";
-    row.innerHTML = `<label>${token.name}
+    row.innerHTML = `<label class="init-include">
+      <input type="checkbox" data-include="${token.id}" checked>
+      <span class="init-name-label">${escapeHtml(token.name)}</span>
       <input type="number" data-token-id="${token.id}" value="${token.initiative || 0}" min="-20" max="30">
     </label>`;
     form.appendChild(row);
@@ -1125,12 +1145,56 @@ function startCombat() {
 function submitInitiatives() {
   const inputs = document.querySelectorAll("#initiative-form input[data-token-id]");
   const initiatives = {};
+  const excluded = [];
   for (const input of inputs) {
-    initiatives[input.dataset.tokenId] = parseInt(input.value) || 0;
+    const tid = input.dataset.tokenId;
+    initiatives[tid] = parseInt(input.value) || 0;
+    const includeBox = document.querySelector(`#initiative-form input[data-include="${tid}"]`);
+    if (includeBox && !includeBox.checked) excluded.push(tid);
   }
   document.getElementById("initiative-modal").classList.add("hidden");
-  socket.emit("start_combat", { initiatives });
+  socket.emit("start_combat", { initiatives, excluded });
 }
+
+// --- Mid-combat initiative editing (DM only) ---
+
+function moveInitiative(tokenId, direction) {
+  socket.emit("initiative_move", { token_id: tokenId, direction });
+}
+
+function removeFromInitiative(tokenId) {
+  socket.emit("initiative_remove", { token_id: tokenId });
+}
+
+function openInitiativeAdder() {
+  const modal = document.getElementById("init-add-modal");
+  if (!modal) return;
+  const list = document.getElementById("init-add-list");
+  list.innerHTML = "";
+  const inOrder = new Set(initiativeOrder);
+  const eligible = Object.values(sessionTokens).filter(t => !inOrder.has(t.id));
+  if (eligible.length === 0) {
+    list.innerHTML = '<div class="init-add-empty">All tokens are already in combat.</div>';
+  } else {
+    for (const token of eligible) {
+      const row = document.createElement("div");
+      row.className = "init-add-row";
+      row.innerHTML = `
+        <span class="init-add-name">${escapeHtml(token.name)}</span>
+        <input type="number" class="init-add-val" value="${token.initiative || 0}" min="-20" max="30">
+        <button class="btn-sm btn-green" data-add-tid="${token.id}">Add</button>
+      `;
+      row.querySelector("button").onclick = () => {
+        const val = parseInt(row.querySelector(".init-add-val").value) || 0;
+        socket.emit("initiative_add", { token_id: token.id, initiative: val });
+        modal.classList.add("hidden");
+      };
+      list.appendChild(row);
+    }
+  }
+  modal.classList.remove("hidden");
+}
+window.openInitiativeAdder = openInitiativeAdder;
 
 function nextTurn() {
   socket.emit("next_turn");
@@ -1181,10 +1245,16 @@ function renderInitiative() {
     const hpText = hpHidden ? "??" : `${token.hp}/${token.max_hp}`;
     const row = document.createElement("div");
     row.className = "init-entry" + (index === currentTurn ? " active" : "");
+    const dmControls = ROLE === "dm" ? `
+      <button class="init-ctrl" onclick="moveInitiative('${tokenId}','up')" ${index === 0 ? "disabled" : ""} title="Move up">▲</button>
+      <button class="init-ctrl" onclick="moveInitiative('${tokenId}','down')" ${index === initiativeOrder.length - 1 ? "disabled" : ""} title="Move down">▼</button>
+      <button class="init-ctrl init-ctrl-x" onclick="removeFromInitiative('${tokenId}')" title="Remove from combat">✕</button>
+    ` : "";
     row.innerHTML = `
       <span class="init-num">${token.initiative}</span>
-      <span class="init-name">${token.name}</span>
+      <span class="init-name">${escapeHtml(token.name)}</span>
       <span class="init-hp${hpClass}">${hpText}</span>
+      ${dmControls}
     `;
     list.appendChild(row);
   });

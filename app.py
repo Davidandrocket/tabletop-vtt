@@ -1792,6 +1792,11 @@ def on_roll_dice(data):
 
     notation = data.get("notation", "1d20")
     private = bool(data.get("private", False)) and info["role"] == "dm"
+    try:
+        advantage = int(data.get("advantage", 0) or 0)
+    except (TypeError, ValueError):
+        advantage = 0
+    advantage = max(-9, min(9, advantage))
 
     # DM fake roll: "1d20(17)" forces the displayed result to 17
     forced = None
@@ -1802,7 +1807,20 @@ def on_roll_dice(data):
             notation_clean = fm.group(1)
             forced = int(fm.group(2))
 
-    result = roll(notation_clean)
+    # Advantage rewrite: only applies to a single-die base roll like "1dN+X"
+    rolled_notation = notation_clean
+    adv_label = ""
+    if advantage != 0:
+        am = re.match(r"^\s*(?:1)?d(\d+)([+-]\d+)?\s*$", notation_clean.lower().replace(" ", ""))
+        if am:
+            sides = am.group(1)
+            mod = am.group(2) or ""
+            n = abs(advantage) + 1
+            mode = "kh" if advantage > 0 else "kl"
+            rolled_notation = f"{n}d{sides}{mode}1{mod}"
+            adv_label = f" (adv {'+' if advantage > 0 else ''}{advantage})"
+
+    result = roll(rolled_notation)
     if result is None:
         emit("error_msg", {"message": "Invalid dice notation."})
         return
@@ -1813,7 +1831,7 @@ def on_roll_dice(data):
 
     msg = {
         "name": info["name"],
-        "notation": notation_clean,
+        "notation": notation_clean + adv_label,
         "result": result["total"],
         "rolls": result["rolls"],
         "modifier": result["modifier"],
@@ -2729,7 +2747,8 @@ def parse_dnd_beyond_character(data, character_id):
 
 def roll(notation):
     notation = notation.strip().lower().replace(" ", "")
-    m = re.match(r"^(\d*)d(\d+)([+-]\d+)?$", notation)
+    # NdM[kh|kl][N][+/-X]  — kh/kl = keep highest/lowest N (default 1)
+    m = re.match(r"^(\d*)d(\d+)(?:(kh|kl)(\d*))?([+-]\d+)?$", notation)
     if not m:
         try:
             v = int(notation)
@@ -2738,11 +2757,21 @@ def roll(notation):
             return None
     count = int(m.group(1)) if m.group(1) else 1
     sides = int(m.group(2))
-    modifier = int(m.group(3)) if m.group(3) else 0
+    keep_mode = m.group(3)               # "kh", "kl", or None
+    keep_n = int(m.group(4)) if m.group(4) else 1
+    modifier = int(m.group(5)) if m.group(5) else 0
     if count > 100 or sides > 1000 or count < 1:
         return None
+    if keep_mode and (keep_n < 1 or keep_n > count):
+        return None
     rolls = [random.randint(1, sides) for _ in range(count)]
-    return {"total": sum(rolls) + modifier, "rolls": rolls, "modifier": modifier}
+    if keep_mode == "kh":
+        kept = sorted(rolls, reverse=True)[:keep_n]
+    elif keep_mode == "kl":
+        kept = sorted(rolls)[:keep_n]
+    else:
+        kept = rolls
+    return {"total": sum(kept) + modifier, "rolls": rolls, "modifier": modifier}
 
 
 init_db()

@@ -282,6 +282,12 @@
             <input id="dice-notation" type="text" value="1d20" placeholder="e.g. 2d6+3">
             <button class="btn-primary" onclick="rollDice()">Roll</button>
           </div>
+          <div class="adv-row">
+            <button class="adv-step" onclick="stepAdvantage(-1)" title="Add disadvantage">−</button>
+            <span id="adv-display" class="adv-display adv-zero">Normal</span>
+            <button class="adv-step" onclick="stepAdvantage(1)" title="Add advantage">+</button>
+            <button class="adv-reset" onclick="resetAdvantage()" title="Reset to normal">↺</button>
+          </div>
           <div class="dice-presets">
             <button onclick="quickRoll('1d4')">d4</button>
             <button onclick="quickRoll('1d6')">d6</button>

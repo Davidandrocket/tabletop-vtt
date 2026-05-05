@@ -1204,17 +1204,47 @@ function updateTurnIndicator(tokenId) {
 
 // --- Dice roller ---
 
+let _advantage = 0;
+
+function stepAdvantage(delta) {
+  _advantage = Math.max(-9, Math.min(9, _advantage + delta));
+  renderAdvantageDisplay();
+}
+
+function resetAdvantage() {
+  _advantage = 0;
+  renderAdvantageDisplay();
+}
+
+function renderAdvantageDisplay() {
+  const el = document.getElementById("adv-display");
+  if (!el) return;
+  el.classList.remove("adv-zero", "adv-pos", "adv-neg");
+  if (_advantage === 0) {
+    el.textContent = "Normal";
+    el.classList.add("adv-zero");
+  } else if (_advantage > 0) {
+    el.textContent = `Adv +${_advantage}`;
+    el.classList.add("adv-pos");
+  } else {
+    el.textContent = `Disadv ${_advantage}`;
+    el.classList.add("adv-neg");
+  }
+}
+
 function rollDice() {
   const notation = document.getElementById("dice-notation").value.trim();
   if (!notation) return;
   const privateRoll = document.getElementById("dice-private")?.checked ?? false;
-  socket.emit("roll_dice", { notation, private: privateRoll });
+  socket.emit("roll_dice", { notation, private: privateRoll, advantage: _advantage });
+  resetAdvantage();
 }
 
 function quickRoll(notation) {
   document.getElementById("dice-notation").value = notation;
   const privateRoll = document.getElementById("dice-private")?.checked ?? false;
-  socket.emit("roll_dice", { notation, private: privateRoll });
+  socket.emit("roll_dice", { notation, private: privateRoll, advantage: _advantage });
+  resetAdvantage();
 }
 
 function fortuneCookie() {

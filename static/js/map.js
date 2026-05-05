@@ -4,11 +4,16 @@ const GRID = 50; // px per cell
 
 // Cell colors for procedural maps (mirrors infinite_dungeon's palette)
 const CELL_COLORS = {
-  wall:        "#3a3a3e",
-  room_floor:  "#8a8a8e",
-  hall_floor:  "#636365",
-  door:        "#8b4513",
-  door_closed: "#5a3210",
+  wall:             "#3a3a3e",
+  room_floor:       "#8a8a8e",
+  hall_floor:       "#636365",
+  door:             "#8b4513",
+  door_closed:      "#5a3210",
+  // Doors that touch a boss room get a distinct red so DMs/players can
+  // identify a boss room from any approach (works for original entry
+  // doors, additional outgoing doors, and merge-carved doors all).
+  boss_door:        "#a83232",
+  boss_door_closed: "#6e1f1f",
 };
 
 // Center cells of the spawn room get tinted teal so the DM/players can tell
@@ -444,9 +449,21 @@ function renderProceduralCells(payload) {
     let color = CELL_COLORS[kind] || CELL_COLORS.wall;
     if (kind === "door") {
       if (secretDoors.has(key)) {
-        // Secret doors mimic walls; secret state takes precedence over
-        // sealed/open distinction so players can't spot them by color.
+        // Secret doors mimic walls; secret takes precedence over both
+        // sealed-vs-open and boss tinting (else we'd leak the secret).
         color = SECRET_DOOR_COLOR;
+      } else if (
+        specialFloors[`${c + 1},${r}`] === "boss"
+        || specialFloors[`${c - 1},${r}`] === "boss"
+        || specialFloors[`${c},${r + 1}`] === "boss"
+        || specialFloors[`${c},${r - 1}`] === "boss"
+      ) {
+        // Adjacency check: any door touching a boss-floor neighbor is a
+        // boss door, no matter how it got there (placed by generator,
+        // additional outgoing, or merge-carved).
+        color = sealedDoorCells.has(key)
+          ? CELL_COLORS.boss_door_closed
+          : CELL_COLORS.boss_door;
       } else if (sealedDoorCells.has(key)) {
         color = CELL_COLORS.door_closed;
       }

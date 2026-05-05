@@ -128,8 +128,6 @@ SPECIAL_ROOM_PROFILES = {
     "secret": {
         "size_range":     (3, 5),
         "n_doors_range":  (0, 0),
-        # Always at least one chest so finding a secret room actually pays
-        # off — anticlimax of an empty hidden room is worse than no secret.
         "min_chests":     1,
         "max_chests":     2,
     },
@@ -348,8 +346,17 @@ def _place_doorway_on_wall(world, rx0, ry0, w, h, side, rng):
     for x, y, px, py in candidates:
         cells = [(x, y), (x + px, y + py)]
         if all(world.cells.get(c) == CellKind.WALL for c in cells):
+            # If a previously-placed secret room shares this wall, the
+            # cells one step outward are its floor. Inherit the secret
+            # tint so this new door doesn't expose the room.
+            beyond = [(x + dx, y + dy), (x + px + dx, y + py + dy)]
+            into_secret = any(
+                world.special_floors.get(c) == "secret" for c in beyond
+            )
             for c in cells:
                 world.cells[c] = CellKind.DOOR
+                if into_secret:
+                    world.secret_doors.add(c)
             world.add_opening(Opening(
                 kind=OpeningKind.DOOR,
                 x=x, y=y, dx=dx, dy=dy, perp_x=px, perp_y=py,
@@ -618,8 +625,18 @@ def _try_merge(world, op):
         beyond = [(c[0] + op.dx, c[1] + op.dy) for c in front]
         beyond_existing = [world.cells.get(c) for c in beyond]
         if all(e is not None and e in _WALKABLE_KINDS for e in beyond_existing):
+            # If we're carving into a secret room, the new door inherits
+            # the secret tint so it doesn't expose the room — without this,
+            # a hall that randomly bumps into a secret room from a side
+            # other than its intended entrance would advertise its location
+            # via a normal-colored door.
+            into_secret = any(
+                world.special_floors.get(c) == "secret" for c in beyond
+            )
             for c in front:
                 world.cells[c] = CellKind.DOOR
+                if into_secret:
+                    world.secret_doors.add(c)
             return True
         return False
     return False

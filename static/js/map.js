@@ -1649,22 +1649,28 @@ function renderFog(fogSet, isDM) {
   const x0 = minC * GRID, y0 = minR * GRID;
   const w = (maxC - minC) * GRID, h = (maxR - minR) * GRID;
 
+  // Draw dark rects only for cells that are NOT revealed. The previous
+  // "fill everything dark, then destination-out the revealed cells"
+  // approach failed for the DM because the punch rects were drawn at
+  // 0.55 alpha (the DM fog opacity), so destination-out only removed 55%
+  // of the destination pixels — leaving the entire grid permanently dim
+  // even when fully revealed. Iterating non-revealed cells avoids the
+  // alpha-aware compositing trap entirely.
+  //
+  // Each rect is drawn 1px larger than GRID so adjacent fog cells overlap
+  // by a pixel — without this, sub-pixel rendering at non-100% zoom
+  // leaves hairline gaps that let the underlying image bleed through.
   const fogShape = new Konva.Shape({
     listening: false,
     sceneFunc: (ctx) => {
-      ctx.save();
       ctx.fillStyle = `rgba(0,0,0,${opacity})`;
-      ctx.fillRect(x0, y0, w, h);
-      ctx.globalCompositeOperation = "destination-out";
-      for (const key of fogSet) {
-        const i = key.indexOf(",");
-        if (i < 0) continue;
-        const c = +key.slice(0, i);
-        const r = +key.slice(i + 1);
-        // Cutouts outside the fog rect are no-ops on canvas; no need to clip.
-        ctx.fillRect(c * GRID, r * GRID, GRID, GRID);
+      for (let c = minC; c < maxC; c++) {
+        for (let r = minR; r < maxR; r++) {
+          if (!fogSet.has(`${c},${r}`)) {
+            ctx.fillRect(c * GRID, r * GRID, GRID + 1, GRID + 1);
+          }
+        }
       }
-      ctx.restore();
     },
   });
   fogLayer.add(fogShape);

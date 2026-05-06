@@ -531,15 +531,22 @@ window.renderProceduralCells = renderProceduralCells;
 
 function drawGrid(cols, rows) {
   gridLayer.destroyChildren();
+  // Clear any leftover background rects on imageLayer (we re-add below if no image)
+  imageLayer.find(".grid-bg").forEach(n => n.destroy());
   const W = cols * GRID;
   const H = rows * GRID;
 
-  // Background — hidden when a map image is loaded
+  // Background — only when there's no map image. Goes on imageLayer (below
+  // gridLayer + tokens), so even if state gets out of sync nothing can cover
+  // a loaded image with the placeholder bg.
   if (!currentMapImage.url) {
-    gridLayer.add(new Konva.Rect({
+    imageLayer.add(new Konva.Rect({
       x: 0, y: 0, width: W, height: H,
       fill: "#111122",
+      name: "grid-bg",
+      listening: false,
     }));
+    imageLayer.batchDraw();
   }
 
   const lineStyle = { stroke: "#2a2a4a", strokeWidth: 1 };

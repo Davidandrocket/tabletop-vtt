@@ -163,6 +163,37 @@ socket.on("token_removed", (data) => {
   if (selectedTokenId === data.id) onTokenSelected(null);
 });
 
+// Profile switch swaps the entire token set in one shot.
+socket.on("tokens_replaced", (data) => {
+  for (const tid of Object.keys(sessionTokens)) {
+    removeTokenFromMap(tid);
+  }
+  sessionTokens = {};
+  selectedTokenId = null;
+  if (window.onTokenSelected) window.onTokenSelected(null);
+
+  for (const token of data.tokens || []) {
+    sessionTokens[token.id] = token;
+    addTokenToMap(token);
+  }
+
+  initiativeOrder = data.initiative_order || [];
+  currentTurn = data.current_turn ?? -1;
+  currentRound = data.current_round ?? 0;
+  renderInitiative();
+  renderRoundTracker();
+  if (initiativeOrder.length === 0) {
+    highlightCurrentTurn(null);
+    updateTurnIndicator(null);
+    setCombatButtonState(false);
+  } else {
+    const activeId = initiativeOrder[currentTurn];
+    highlightCurrentTurn(activeId);
+    updateTurnIndicator(activeId);
+    setCombatButtonState(true);
+  }
+});
+
 socket.on("ping", (data) => {
   showPing(data.x, data.y, data.color);
 });

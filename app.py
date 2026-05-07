@@ -167,6 +167,7 @@ def init_db():
             ("origin_x",         "INTEGER DEFAULT 0"),
             ("origin_y",         "INTEGER DEFAULT 0"),
             ("preset",           "TEXT DEFAULT 'generic'"),
+            ("tokens_json",      "TEXT DEFAULT '[]'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE map_profiles ADD COLUMN {col} {defn}")
@@ -280,6 +281,52 @@ def db_upsert_token(token, code):
 def db_delete_token(token_id):
     with get_db() as conn:
         conn.execute("DELETE FROM tokens WHERE id = ?", (token_id,))
+
+
+def _serialize_tokens_for_profile(sess):
+    """JSON list of all current session tokens (snapshot for a profile row)."""
+    return json.dumps(list(sess["tokens"].values()))
+
+
+def _replace_session_tokens(code, sess, tokens_data):
+    """Wipe and refill the session's tokens from a deserialized list. Updates
+    sess['tokens'], the tokens DB table, fixes initiative_order to drop any
+    orphan token IDs, and broadcasts tokens_replaced to all clients."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM tokens WHERE session_code = ?", (code,))
+    sess["tokens"] = {}
+    new_ids = set()
+    for t in tokens_data or []:
+        if not isinstance(t, dict) or "id" not in t:
+            continue
+        sess["tokens"][t["id"]] = t
+        db_upsert_token(t, code)
+        new_ids.add(t["id"])
+    sess["initiative_order"] = [tid for tid in sess["initiative_order"] if tid in new_ids]
+    if not sess["initiative_order"]:
+        sess["current_turn"] = -1
+        sess["current_round"] = 0
+    elif sess["current_turn"] >= len(sess["initiative_order"]):
+        sess["current_turn"] = 0
+    db_save_session(code)
+    emit("tokens_replaced", {
+        "tokens": list(sess["tokens"].values()),
+        "initiative_order": sess["initiative_order"],
+        "current_turn": sess["current_turn"],
+        "current_round": sess.get("current_round", 0),
+    }, room=code)
+
+
+def _autosave_active_profile_tokens(code, sess):
+    """If a profile is currently active, snapshot the live tokens into its row."""
+    pid = sess.get("active_profile_id")
+    if not pid:
+        return
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE map_profiles SET tokens_json = ? WHERE id = ? AND session_code = ?",
+            (_serialize_tokens_for_profile(sess), int(pid), code),
+        )
 
 
 def db_append_chat(msg, code):
@@ -1410,17 +1457,19 @@ def on_save_map_profile(data):
             image_url = f"/static/uploads/{profile_filename}"
 
     fog_list = [list(c) for c in sess.get("fog", set())]
+    tokens_json = _serialize_tokens_for_profile(sess)
     with get_db() as conn:
         cursor = conn.execute("""
             INSERT INTO map_profiles
-                (session_code, name, image_url, offset_x, offset_y, scale_x, scale_y, cols, rows, fog)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (session_code, name, image_url, offset_x, offset_y, scale_x, scale_y, cols, rows, fog, tokens_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             code, name, image_url,
             current_map.get("offset_x", 0), current_map.get("offset_y", 0),
             current_map.get("scale_x", 1), current_map.get("scale_y", 1),
             current_map.get("cols", 20), current_map.get("rows", 15),
             json.dumps(fog_list),
+            tokens_json,
         ))
         profile_id = cursor.lastrowid
 
@@ -1451,6 +1500,10 @@ def on_load_map_profile(data):
         ).fetchone()
     if not row:
         return
+
+    # Snapshot current tokens into the previously-active profile (autosave).
+    # Done before swapping active_profile_id so the snapshot lands on the right row.
+    _autosave_active_profile_tokens(code, sess)
 
     fog_raw = json.loads(row["fog"] or "[]")
     kind = row["kind"] or "image"
@@ -1498,6 +1551,13 @@ def on_load_map_profile(data):
         "active_profile_id": row["id"],
     }, room=code)
 
+    # Swap in the target profile's tokens (broadcasts tokens_replaced).
+    try:
+        target_tokens = json.loads(row["tokens_json"] or "[]")
+    except (TypeError, ValueError):
+        target_tokens = []
+    _replace_session_tokens(code, sess, target_tokens)
+
 
 @socketio.on("create_procedural_profile")
 def on_create_procedural_profile(data):
@@ -1528,6 +1588,10 @@ def on_create_procedural_profile(data):
     origin_y = rows // 2
 
     world = dungeon_gen.make_world(seed, preset_name=preset_name)
+
+    # Snapshot current tokens into the previously-active profile before
+    # we activate the new procedural one (which starts empty).
+    _autosave_active_profile_tokens(code, sess)
 
     with get_db() as conn:
         cursor = conn.execute("""
@@ -1571,6 +1635,10 @@ def on_create_procedural_profile(data):
         "profiles": db_load_profiles(code),
         "active_profile_id": profile_id,
     }, room=code)
+
+    # Procedural dungeons start with no tokens. Replace clears the live
+    # tokens table for this session and broadcasts tokens_replaced.
+    _replace_session_tokens(code, sess, [])
 
 
 def _chest_facing_from_neighbors(world, cell):

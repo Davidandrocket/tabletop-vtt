@@ -221,6 +221,11 @@ socket.on("procedural_chest_changed", (msg) => {
   window.applyChestChange?.(msg.col, msg.row, msg.action, msg.facing);
 });
 
+socket.on("procedural_trap_changed", (msg) => {
+  if (!msg) return;
+  window.applyTrapChange?.(msg.col, msg.row, msg.action);
+});
+
 socket.on("fog_updated", (data) => {
   fogRevealed.clear();
   for (const [col, row] of (data.fog || [])) {
@@ -1512,6 +1517,16 @@ document.addEventListener("keydown", (e) => {
       && ROLE === "dm" && window.hasProceduralMap?.()) {
     const cell = window.getLastMouseCell?.();
     if (cell) socket.emit("procedural_chest_place_remove", { col: cell.col, row: cell.row });
+    return;
+  }
+
+  // T: place or remove a trap at the cursor cell (DM, procedural only).
+  // Mirrors the C-key chest hotkey; primary use is marking a trap as
+  // disarmed mid-session, but plain placement also works.
+  if ((e.key === "t" || e.key === "T") && !e.ctrlKey && !e.metaKey && !e.altKey
+      && ROLE === "dm" && window.hasProceduralMap?.()) {
+    const cell = window.getLastMouseCell?.();
+    if (cell) socket.emit("procedural_trap_place_remove", { col: cell.col, row: cell.row });
     return;
   }
 

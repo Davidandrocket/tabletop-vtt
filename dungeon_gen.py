@@ -134,6 +134,18 @@ SPECIAL_ROOM_PROFILES = {
 }
 
 
+# --- Traps ---
+# Per hall-segment chance to spawn a trap somewhere along it. Junctions
+# (the 2x2 intersections) skip the roll because they're meeting points,
+# not ambush spots.
+TRAP_CHANCE = 0.05
+
+# Once a trap is rolled, weights pick its footprint. 1x2 covers the full
+# hall width at one step (2 cells). 2x2 covers two consecutive steps
+# (4 cells). Smaller is more common.
+TRAP_SIZE_WEIGHTS = {"1x2": 60, "2x2": 40}
+
+
 # --- Data model ---
 
 @dataclass
@@ -177,6 +189,10 @@ class World:
         # but render with the wall color (or a near-wall tint) on the
         # client so players have to discover them by trying to walk in.
         self.secret_doors: set[tuple[int, int]] = set()
+        # traps: floor cells (room or hall) tagged as trapped. Cell kind
+        # stays room/hall_floor for walkability/fog/etc. — the trap is just
+        # a render overlay (red wash for the DM, faint hint for players).
+        self.traps: set[tuple[int, int]] = set()
 
     def get(self, x, y):
         return self.cells.get((x, y))
@@ -213,6 +229,7 @@ class World:
                 f"{x},{y}": kind for (x, y), kind in self.special_floors.items()
             },
             "secret_doors": [f"{x},{y}" for (x, y) in self.secret_doors],
+            "traps": [f"{x},{y}" for (x, y) in self.traps],
         }
 
     @classmethod
@@ -243,6 +260,9 @@ class World:
         for key in d.get("secret_doors", []):
             x, y = key.split(",")
             w.secret_doors.add((int(x), int(y)))
+        for key in d.get("traps", []):
+            x, y = key.split(",")
+            w.traps.add((int(x), int(y)))
         return w
 
 
@@ -508,6 +528,8 @@ def _try_place_hall_past_door(world, op, rng):
                 x=end[0], y=end[1],
                 dx=op.dx, dy=op.dy, perp_x=op.perp_x, perp_y=op.perp_y,
             ))
+            _maybe_place_trap_in_segment(world, sx, sy, op.dx, op.dy,
+                                          op.perp_x, op.perp_y, length, rng)
             return True
     return False
 
@@ -522,6 +544,8 @@ def _try_extend_hall_straight(world, op, rng):
                 x=end[0], y=end[1],
                 dx=op.dx, dy=op.dy, perp_x=op.perp_x, perp_y=op.perp_y,
             ))
+            _maybe_place_trap_in_segment(world, op.x, op.y, op.dx, op.dy,
+                                          op.perp_x, op.perp_y, length, rng)
             return True
     return False
 
@@ -921,8 +945,11 @@ def _maybe_place_chest_in_dead_end(world, op, rng):
         return
     last_a = (op.x - op.dx, op.y - op.dy)
     last_b = (op.x - op.dx + op.perp_x, op.y - op.dy + op.perp_y)
+    # Skip cells already tagged as traps so a chest doesn't sit on top of
+    # a trap (visually + narratively confusing).
     candidates = [c for c in (last_a, last_b)
-                  if world.cells.get(c) == CellKind.HALL_FLOOR]
+                  if world.cells.get(c) == CellKind.HALL_FLOOR
+                  and c not in world.traps]
     if not candidates:
         return
     cell = rng.choice(candidates)
@@ -934,6 +961,35 @@ def _chest_rng(world, op):
     the resolution RNG so chest rolls don't depend on which placement
     attempts succeeded first."""
     return random.Random(hash((world.seed, op.x, op.y, op.dx, op.dy, "chest")))
+
+
+def _maybe_place_trap_in_segment(world, sx, sy, dx, dy, perp_x, perp_y, length, rng):
+    """After a hall segment is placed, roll for a trap somewhere along it.
+    Trap cells stay HALL_FLOOR for walkability; the trap is just a tag in
+    world.traps that the renderer paints with a red wash."""
+    if length < 1 or rng.random() >= TRAP_CHANCE:
+        return
+    size = _weighted_pick(rng, TRAP_SIZE_WEIGHTS)
+    if size == "2x2" and length < 2:
+        size = "1x2"
+
+    if size == "1x2":
+        # Single step somewhere along the segment, biased toward the middle
+        # when the segment's long enough to give us room.
+        i = rng.randint(1, length - 2) if length >= 3 else rng.randint(0, length - 1)
+        steps = (i,)
+    else:
+        # 2x2 needs two consecutive steps.
+        i = rng.randint(1, length - 3) if length >= 4 else rng.randint(0, length - 2)
+        steps = (i, i + 1)
+
+    for step in steps:
+        for cell in (
+            (sx + step * dx, sy + step * dy),
+            (sx + step * dx + perp_x, sy + step * dy + perp_y),
+        ):
+            if world.cells.get(cell) == CellKind.HALL_FLOOR:
+                world.traps.add(cell)
 
 
 # --- Spawn ---
@@ -1004,6 +1060,9 @@ def world_to_wire(world: World, origin_x: int, origin_y: int) -> dict:
     secret_doors = [
         f"{x + origin_x},{y + origin_y}" for (x, y) in world.secret_doors
     ]
+    traps = [
+        f"{x + origin_x},{y + origin_y}" for (x, y) in world.traps
+    ]
     # Center 2x2 of the spawn room (works for both even-sized presets we ship)
     spawn_marker = []
     for sx, sy in ((-1, -1), (-1, 0), (0, -1), (0, 0)):
@@ -1017,5 +1076,6 @@ def world_to_wire(world: World, origin_x: int, origin_y: int) -> dict:
         "chests_opened": chests_opened,
         "special_floors": special_floors,
         "secret_doors": secret_doors,
+        "traps": traps,
         "spawn_marker": spawn_marker,
     }

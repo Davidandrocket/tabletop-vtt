@@ -32,6 +32,12 @@ const SPECIAL_FLOOR_COLORS = {
 // players) can spot them if they look carefully.
 const SECRET_DOOR_COLOR = "#3c3a3e";
 
+// Trap overlays painted on top of the floor. DM gets a clear red wash;
+// players get a subtle hint they could miss if they aren't paying
+// attention. Same hue both ways so a discovery feels coherent.
+const TRAP_OVERLAY_DM = "rgba(168, 50, 50, 0.4)";
+const TRAP_OVERLAY_PLAYER = "rgba(168, 50, 50, 0.02)";
+
 // chest.svg's default art faces south (opens downward). Rotate clockwise
 // by these radians to make it open in other directions:
 //   south = 0   west = 90°   north = 180°   east = 270°
@@ -61,6 +67,7 @@ function ensureChestImage() {
 // chest-toggle socket listener.
 let proceduralChests = {};            // "col,row" -> facing
 let proceduralChestsOpened = new Set();  // "col,row" of opened chests
+let proceduralTraps = new Set();       // "col,row" of trap cells
 
 // Try to handle a stage click as a chest toggle. Returns true if it took
 // the click (and emitted the toggle event); false otherwise. DM only,
@@ -98,6 +105,15 @@ function applyChestChange(col, row, action, facing) {
   if (cellLayer) cellLayer.batchDraw();
 }
 window.applyChestChange = applyChestChange;
+
+// Called when the server broadcasts a trap spawn/removal (T-key DM action).
+function applyTrapChange(col, row, action) {
+  const key = `${col},${row}`;
+  if (action === "removed") proceduralTraps.delete(key);
+  else if (action === "placed") proceduralTraps.add(key);
+  if (cellLayer) cellLayer.batchDraw();
+}
+window.applyTrapChange = applyTrapChange;
 
 // True when a procedural map is currently active. Used by the C-key
 // handler to know whether the shortcut applies.
@@ -410,6 +426,7 @@ function renderProceduralCells(payload) {
     proceduralBounds = null;
     proceduralChests = {};
     proceduralChestsOpened = new Set();
+    proceduralTraps = new Set();
     cellLayer.batchDraw();
     return;
   }
@@ -431,6 +448,7 @@ function renderProceduralCells(payload) {
   const chests = payload.chests || {};
   proceduralChests = chests;
   proceduralChestsOpened = new Set(payload.chests_opened || []);
+  proceduralTraps = new Set(payload.traps || []);
   const spawnMarker = payload.spawn_marker || [];
   const specialFloors = payload.special_floors || {};
   const secretDoors = new Set(payload.secret_doors || []);
@@ -495,6 +513,20 @@ function renderProceduralCells(payload) {
       if (spawnMarker.length) {
         ctx.fillStyle = SPAWN_MARKER_COLOR;
         for (const key of spawnMarker) {
+          const i = key.indexOf(",");
+          if (i < 0) continue;
+          const c = +key.slice(0, i);
+          const r = +key.slice(i + 1);
+          ctx.fillRect(c * GRID, r * GRID, GRID, GRID);
+        }
+      }
+      // Trap overlay: bright red wash for the DM, faint hint for players.
+      // Painted before chest sprites so chest art stays clearly visible.
+      if (proceduralTraps.size) {
+        ctx.fillStyle = (document.body.dataset.role === "dm")
+          ? TRAP_OVERLAY_DM
+          : TRAP_OVERLAY_PLAYER;
+        for (const key of proceduralTraps) {
           const i = key.indexOf(",");
           if (i < 0) continue;
           const c = +key.slice(0, i);

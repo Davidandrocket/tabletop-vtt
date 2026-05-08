@@ -1702,6 +1702,48 @@ def on_procedural_chest_place_remove(data):
     )
 
 
+@socketio.on("procedural_trap_place_remove")
+def on_procedural_trap_place_remove(data):
+    """DM hotkey (T): tag the cell as a trap, or untag if it's already
+    one. The natural use is marking a trap as disarmed mid-session."""
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess or not sess.get("procedural"):
+        return
+    try:
+        col = int(data["col"])
+        row = int(data["row"])
+    except (KeyError, TypeError, ValueError):
+        return
+
+    p = sess["procedural"]
+    world = p["world"]
+    cell = (col - p["origin_x"], row - p["origin_y"])
+
+    if cell in world.traps:
+        world.traps.discard(cell)
+        action = "removed"
+    else:
+        kind = world.cells.get(cell)
+        if kind not in (dungeon_gen.CellKind.ROOM_FLOOR, dungeon_gen.CellKind.HALL_FLOOR):
+            return  # only on floor cells
+        world.traps.add(cell)
+        action = "placed"
+
+    state_json = json.dumps(world.to_dict())
+    socketio.start_background_task(
+        _persist_procedural_state_json_async, sess["active_profile_id"], state_json
+    )
+    socketio.emit(
+        "procedural_trap_changed",
+        {"col": col, "row": row, "action": action},
+        room=code,
+    )
+
+
 @socketio.on("procedural_chest_toggle")
 def on_procedural_chest_toggle(data):
     """DM clicked a chest cell. Toggle its opened state, persist, broadcast.

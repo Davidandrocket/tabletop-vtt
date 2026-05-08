@@ -1394,12 +1394,14 @@ function appendChat(msg, scroll = true) {
   const entry = document.createElement("div");
 
   if (msg.type === "dice") {
-    entry.className = "chat-entry dice-entry" + (msg.private ? " dice-private" : "");
+    const critClass = msg.crit_state === "crit" ? " dice-crit"
+                    : msg.crit_state === "fail" ? " dice-fail" : "";
+    entry.className = "chat-entry dice-entry" + (msg.private ? " dice-private" : "") + critClass;
     const rollDetail = msg.rolls.length > 1
       ? ` [${msg.rolls.join(", ")}]${msg.modifier !== 0 ? (msg.modifier > 0 ? `+${msg.modifier}` : msg.modifier) : ""}`
       : "";
     const privateTag = msg.private ? '<span class="dice-private-tag">🔒 </span>' : "";
-    entry.innerHTML = `${privateTag}<span class="chat-who">${msg.name}</span> rolled <strong>${msg.notation}</strong>: <strong>${msg.result}</strong><span class="dice-detail">${rollDetail}</span>`;
+    entry.innerHTML = `${privateTag}<span class="chat-who">${msg.name}</span> rolled <strong>${msg.notation}</strong>: <strong class="dice-result">${msg.result}</strong><span class="dice-detail">${rollDetail}</span>`;
   } else if (msg.type === "fortune") {
     entry.className = "chat-entry fortune-entry";
     entry.innerHTML = `🥠 <span class="chat-who">${escapeHtml(msg.name)}</span> cracked a fortune cookie: <em>${escapeHtml(msg.fortune)}</em>`;

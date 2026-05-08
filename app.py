@@ -2037,6 +2037,25 @@ def on_roll_dice(data):
         result["total"] = forced
         result["rolls"] = [forced]
 
+    # Crit detection on d20 rolls — picks the "kept" die (max for advantage,
+    # min for disadvantage, single roll otherwise) and tags nat 20 / nat 1.
+    crit_state = None
+    is_d20 = bool(re.match(
+        r"^\s*(?:1)?d20([+-]\d+)?\s*$",
+        notation_clean.lower().replace(" ", ""),
+    ))
+    if is_d20 and result["rolls"]:
+        if advantage > 0:
+            kept = max(result["rolls"])
+        elif advantage < 0:
+            kept = min(result["rolls"])
+        else:
+            kept = result["rolls"][0]
+        if kept == 20:
+            crit_state = "crit"
+        elif kept == 1:
+            crit_state = "fail"
+
     display_notation = (label if label else notation_clean) + adv_label
     msg = {
         "name": info["name"],
@@ -2046,6 +2065,8 @@ def on_roll_dice(data):
         "modifier": result["modifier"],
         "type": "dice",
     }
+    if crit_state:
+        msg["crit_state"] = crit_state
     code = info["code"]
     if private:
         msg["private"] = True

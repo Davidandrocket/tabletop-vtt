@@ -758,6 +758,8 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 .chat-entry .dice-detail { font-size: 0.75rem; color: var(--text-dim); }
 .chat-entry.dice-private { opacity: 0.75; font-style: italic; }
 .dice-private-tag { font-size: 0.7rem; }
+.chat-entry.dice-crit .dice-result { color: #b07cff; text-shadow: 0 0 4px rgba(176, 124, 255, 0.5); }
+.chat-entry.dice-fail .dice-result { color: #ff6464; text-shadow: 0 0 4px rgba(255, 100, 100, 0.5); }
 .chat-entry.fortune-entry { color: var(--text-dim); }
 .chat-entry.fortune-entry .chat-who { color: var(--accent); }
 

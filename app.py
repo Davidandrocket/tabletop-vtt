@@ -2037,20 +2037,25 @@ def on_roll_dice(data):
         result["total"] = forced
         result["rolls"] = [forced]
 
-    # Crit detection on d20 rolls — picks the "kept" die (max for advantage,
-    # min for disadvantage, single roll otherwise) and tags nat 20 / nat 1.
+    # Crit detection on d20 rolls — picks the "kept" die and tags nat 20 / nat 1.
     crit_state = None
     is_d20 = bool(re.match(
         r"^\s*(?:1)?d20([+-]\d+)?\s*$",
         notation_clean.lower().replace(" ", ""),
     ))
-    if is_d20 and result["rolls"]:
-        if advantage > 0:
-            kept = max(result["rolls"])
-        elif advantage < 0:
-            kept = min(result["rolls"])
-        else:
-            kept = result["rolls"][0]
+    if is_d20:
+        kept = None
+        if forced is not None:
+            # Forced result reflects the FINAL number; back out the modifier
+            # to recover the natural die. e.g. 1d20+5(25) implies a nat 20.
+            kept = forced - result["modifier"]
+        elif result["rolls"]:
+            if advantage > 0:
+                kept = max(result["rolls"])
+            elif advantage < 0:
+                kept = min(result["rolls"])
+            else:
+                kept = result["rolls"][0]
         if kept == 20:
             crit_state = "crit"
         elif kept == 1:

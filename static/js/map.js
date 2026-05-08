@@ -30,7 +30,7 @@ const SPECIAL_FLOOR_COLORS = {
 // Secret doors render with a wall-ish color so players don't notice them
 // at a glance. Slightly off the base wall color so the DM (and observant
 // players) can spot them if they look carefully.
-const SECRET_DOOR_COLOR = "#3d3a3e";
+const SECRET_DOOR_COLOR = "#3c3a3e";
 
 // chest.svg's default art faces south (opens downward). Rotate clockwise
 // by these radians to make it open in other directions:

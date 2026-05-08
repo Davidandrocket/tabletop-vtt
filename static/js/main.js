@@ -596,7 +596,10 @@ function renderCharacterSheet(char) {
   document.getElementById("stat-ac").textContent = char.ac ?? "—";
   document.getElementById("stat-speed").textContent = char.speed ? `${char.speed}ft` : "—";
   const initBonus = char.initiative_bonus ?? 0;
-  document.getElementById("stat-init").textContent = initBonus >= 0 ? `+${initBonus}` : `${initBonus}`;
+  const initEl = document.getElementById("stat-init");
+  initEl.textContent = initBonus >= 0 ? `+${initBonus}` : `${initBonus}`;
+  initEl.classList.add("quick-roll");
+  initEl.onclick = () => quickRollMod(initBonus, "Initiative");
   const prof = char.proficiency_bonus ?? 2;
   document.getElementById("stat-prof").textContent = `+${prof}`;
 
@@ -607,10 +610,12 @@ function renderCharacterSheet(char) {
     const ab = char.abilities?.[key] || { score: 10, modifier: 0 };
     const mod = ab.modifier >= 0 ? `+${ab.modifier}` : `${ab.modifier}`;
     const cell = document.createElement("div");
-    cell.className = "ability-box";
+    cell.className = "ability-box quick-roll";
+    cell.title = `Roll ${label} check (1d20${mod})`;
     cell.innerHTML = `<div class="ability-name">${label}</div>
                       <div class="ability-score">${ab.score}</div>
                       <div class="ability-mod">${mod}</div>`;
+    cell.onclick = () => quickRollMod(ab.modifier, `${label} check`);
     abilityGrid.appendChild(cell);
   }
 
@@ -622,10 +627,12 @@ function renderCharacterSheet(char) {
     const val = save.value >= 0 ? `+${save.value}` : `${save.value}`;
     const profClass = save.proficiency > 0 ? " proficient" : "";
     const row = document.createElement("div");
-    row.className = "save-item";
+    row.className = "save-item quick-roll";
+    row.title = `Roll ${label} save (1d20${val})`;
     row.innerHTML = `<span class="prof-dot${profClass}"></span>
                      <span style="min-width:28px;font-weight:600">${val}</span>
                      <span>${label}</span>`;
+    row.onclick = () => quickRollMod(save.value, `${label} save`);
     saveList.appendChild(row);
   }
 
@@ -634,13 +641,16 @@ function renderCharacterSheet(char) {
   skillList.innerHTML = "";
   for (const [key, label] of Object.entries(SKILL_LABELS)) {
     const skill = char.skills?.[key];
-    const val = skill ? (skill.value >= 0 ? `+${skill.value}` : `${skill.value}`) : "+0";
+    const skillVal = skill ? skill.value : 0;
+    const val = skillVal >= 0 ? `+${skillVal}` : `${skillVal}`;
     const profClass = skill?.proficiency >= 2 ? " proficient" : skill?.proficiency > 0 ? " half" : "";
     const row = document.createElement("div");
-    row.className = "skill-item";
+    row.className = "skill-item quick-roll";
+    row.title = `Roll ${label} (1d20${val})`;
     row.innerHTML = `<span class="prof-dot${profClass}"></span>
                      <span class="skill-val">${val}</span>
                      <span>${label}</span>`;
+    row.onclick = () => quickRollMod(skillVal, `${label} check`);
     skillList.appendChild(row);
   }
 
@@ -1345,6 +1355,18 @@ function rollDice() {
   socket.emit("roll_dice", { notation, private: privateRoll, advantage: _advantage });
   resetAdvantage();
 }
+
+// Quick-roll a d20 with the given modifier and a chat label.
+// Used by clickable elements in the character sheet.
+function quickRollMod(modifier, label) {
+  const mod = parseInt(modifier) || 0;
+  const sign = mod >= 0 ? "+" : "";
+  const notation = `1d20${sign}${mod}`;
+  const privateRoll = document.getElementById("dice-private")?.checked ?? false;
+  socket.emit("roll_dice", { notation, label, private: privateRoll, advantage: _advantage });
+  resetAdvantage();
+}
+window.quickRollMod = quickRollMod;
 
 function quickRoll(notation) {
   document.getElementById("dice-notation").value = notation;

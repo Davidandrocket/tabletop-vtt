@@ -559,6 +559,26 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
 .prof-dot.half         { background: var(--yellow); border-color: var(--yellow); }
 .skill-val { margin-left: auto; font-weight: 600; min-width: 28px; text-align: right; }
 
+/* Quick-roll clickable elements: ability scores, saves, skills, initiative */
+.quick-roll {
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  border-radius: 4px;
+}
+.quick-roll:hover {
+  background: rgba(74, 144, 217, 0.18);
+  color: var(--text);
+}
+.ability-box.quick-roll:hover {
+  outline: 1px solid var(--accent2);
+}
+#stat-init.quick-roll {
+  padding: 0 4px;
+}
+#stat-init.quick-roll:hover {
+  background: rgba(74, 144, 217, 0.25);
+}
+
 .resource-item, .slot-item {
   display: flex;
   align-items: center;

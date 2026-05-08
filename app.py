@@ -1999,6 +1999,7 @@ def on_roll_dice(data):
 
     notation = data.get("notation", "1d20")
     private = bool(data.get("private", False)) and info["role"] == "dm"
+    label = str(data.get("label", "") or "").strip()[:50]
     try:
         advantage = int(data.get("advantage", 0) or 0)
     except (TypeError, ValueError):
@@ -2036,9 +2037,10 @@ def on_roll_dice(data):
         result["total"] = forced
         result["rolls"] = [forced]
 
+    display_notation = (label if label else notation_clean) + adv_label
     msg = {
         "name": info["name"],
-        "notation": notation_clean + adv_label,
+        "notation": display_notation,
         "result": result["total"],
         "rolls": result["rolls"],
         "modifier": result["modifier"],

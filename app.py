@@ -999,7 +999,7 @@ def on_add_token(data):
         is_player=bool(data.get("is_player", False)),
         player_id=_resolve_player_id(data.get("player_id"), sess),
         image_url=data.get("image_url") or None,
-        size=max(1, min(4, int(data.get("size", 1)))),
+        size=max(1, min(20, int(data.get("size", 1)))),
         show_hp=bool(data["show_hp"]) if "show_hp" in data else None,
         initiative_mod=int(data.get("initiative_mod", 0)),
     )
@@ -1086,7 +1086,7 @@ def on_update_token(data):
     if "image_url" in data:
         token["image_url"] = data["image_url"] or None
     if "size" in data:
-        token["size"] = max(1, min(4, int(data["size"])))
+        token["size"] = max(1, min(20, int(data["size"])))
     if "hp" in data:
         token["hp"] = max(0, int(data["hp"]))
     if "max_hp" in data:
@@ -1908,7 +1908,7 @@ def on_save_to_library(data):
     max_hp = max(1, int(data.get("max_hp", 10)))
     color = str(data.get("color", "#e74c3c"))[:7]
     image_url = data.get("image_url") or None
-    size = max(1, min(4, int(data.get("size", 1))))
+    size = max(1, min(20, int(data.get("size", 1))))
     initiative_mod = int(data.get("initiative_mod", 0))
     show_hp = bool(data.get("show_hp", True))
     with get_db() as conn:
@@ -1932,7 +1932,7 @@ def on_update_library_entry(data):
     max_hp = max(1, int(data.get("max_hp", 10)))
     color = str(data.get("color", "#e74c3c"))[:7]
     image_url = data.get("image_url") or None
-    size = max(1, min(4, int(data.get("size", 1))))
+    size = max(1, min(20, int(data.get("size", 1))))
     initiative_mod = int(data.get("initiative_mod", 0))
     show_hp = bool(data.get("show_hp", True))
     with get_db() as conn:

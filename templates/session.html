@@ -331,13 +331,9 @@
       <label>HP <input id="tok-hp" type="number" value="10" min="1"></label>
       <label>Max HP <input id="tok-maxhp" type="number" value="10" min="1"></label>
       <label>Color <input id="tok-color" type="color" value="#e74c3c"></label>
-      <label>Size
-        <select id="tok-size">
-          <option value="1">1×1 — Small / Medium</option>
-          <option value="2">2×2 — Large</option>
-          <option value="3">3×3 — Huge</option>
-          <option value="4">4×4 — Gargantuan</option>
-        </select>
+      <label>Size (cells)
+        <input id="tok-size" type="number" min="1" max="20" value="1" style="width:80px">
+        <span style="color:var(--text-dim);font-size:0.75rem">1 = Med · 2 = Large · 3 = Huge · 4+ = Gargantuan</span>
       </label>
       <label>Image URL <span style="color:var(--text-dim);font-size:0.75rem">(optional)</span>
         <input id="tok-image" type="text" placeholder="https://...">
@@ -366,13 +362,9 @@
       <label>HP <input id="edit-tok-hp" type="number" min="0"></label>
       <label>Max HP <input id="edit-tok-maxhp" type="number" min="1"></label>
       <label>Color <input id="edit-tok-color" type="color"></label>
-      <label>Size
-        <select id="edit-tok-size">
-          <option value="1">1×1 — Small / Medium</option>
-          <option value="2">2×2 — Large</option>
-          <option value="3">3×3 — Huge</option>
-          <option value="4">4×4 — Gargantuan</option>
-        </select>
+      <label>Size (cells)
+        <input id="edit-tok-size" type="number" min="1" max="20" value="1" style="width:80px">
+        <span style="color:var(--text-dim);font-size:0.75rem">1 = Med · 2 = Large · 3 = Huge · 4+ = Gargantuan</span>
       </label>
       <label>Image URL <span style="color:var(--text-dim);font-size:0.75rem">(optional)</span>
         <input id="edit-tok-image" type="text" placeholder="https://...">

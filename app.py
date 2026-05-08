@@ -2896,7 +2896,13 @@ def parse_dnd_beyond_character(data, character_id):
     init_bonus = dex_mod
     for m in all_mods:
         if m.get("type") == "bonus" and m.get("subType") == "initiative":
-            init_bonus += m.get("value") or 0
+            val = m.get("value")
+            if val is not None:
+                init_bonus += val
+            elif 1 in (m.get("bonusTypes") or []):
+                # D&DBeyond encodes "add proficiency bonus" as value=null + bonusTypes=[1]
+                # (e.g. the 2024 Alert feat: "add PB to initiative")
+                init_bonus += prof_bonus
 
     # --- Spell slots ---
     # In D&DBeyond API: available = remaining slots, used = slots spent,

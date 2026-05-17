@@ -950,6 +950,7 @@ function selectToken(tokenId) {
 
 function selectMultiple(ids) {
   clearAllHighlights();
+  if (selectedStickerId && typeof deselectSticker === "function") deselectSticker();
   selectedTokenIds = new Set(ids);
   selectedTokenId  = null; // no HP editor for multi-select
   ids.forEach(id => tokenNodes[id]?.findOne(".body")?.strokeWidth(4));
@@ -1416,6 +1417,8 @@ function applyHandlePos(data, hx, hy) {
 function selectSpellShape(id) {
   if (selectedSpellId === id) return;
   deselectSpellShape();
+  // Selecting a spell shape clears sticker selection.
+  if (selectedStickerId) deselectSticker();
   const node = spellNodes[id];
   if (!node) return;
   selectedSpellId = id;
@@ -1833,6 +1836,137 @@ function _loadStickerImage(url) {
   return _stickerImageCache[url];
 }
 
+// --- Animated sticker decoding ---
+// Chromium pauses GIF/WebP animation on non-visible elements, so attaching
+// an Image to a hidden DOM container doesn't keep frames progressing. We
+// decode the frames ourselves with the native ImageDecoder API, then paint
+// the current frame to a per-sticker <canvas> on every RAF tick. Konva.Image
+// reads from the canvas via drawImage, so it always shows the latest frame.
+const _animatedStickerAssets = {};  // sticker_id -> { canvas, ctx, frames, totalDurationMs, startTime, naturalW, naturalH }
+
+async function _decodeAnimatedSticker(url) {
+  // Returns { frames, totalDurationMs, naturalW, naturalH } or null on failure / single frame.
+  if (typeof ImageDecoder === "undefined") return null;
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    // Pick MIME from URL extension; server's content-type can be wrong
+    // (e.g. Windows Flask serves .webp as application/octet-stream, which
+    // ImageDecoder rejects).
+    const lower = url.toLowerCase();
+    let type;
+    if      (lower.endsWith(".gif"))  type = "image/gif";
+    else if (lower.endsWith(".webp")) type = "image/webp";
+    else if (lower.endsWith(".png"))  type = "image/png";
+    else                              type = resp.headers.get("content-type") || "image/webp";
+    const buf = await resp.arrayBuffer();
+    const decoder = new ImageDecoder({ data: buf, type });
+    // tracks.ready resolves once tracks are known, but frameCount may
+    // still be null for animated WebP. Await `completed` so we know the
+    // full frame count before we decide animated vs static.
+    await decoder.tracks.ready;
+    if (decoder.completed) {
+      try { await decoder.completed; } catch (_) { /* some browsers don't support completed yet */ }
+    }
+    const track = decoder.tracks.selectedTrack;
+    // Defensive: null <= 1 evaluates true in JS, which would silently bail. Cast to a real number.
+    const rawCount = track?.frameCount;
+    const frameCount = (typeof rawCount === "number" && rawCount > 0) ? rawCount : 0;
+    if (frameCount <= 1) { decoder.close(); return null; }
+    const frames = [];
+    let totalDurationMs = 0;
+    let naturalW = 0, naturalH = 0;
+    for (let i = 0; i < frameCount; i++) {
+      const result = await decoder.decode({ frameIndex: i });
+      const vf = result.image;
+      const bitmap = await createImageBitmap(vf);
+      // VideoFrame.duration is in microseconds (or null if unknown — fall back to 100ms)
+      const durMs = vf.duration ? Math.max(20, vf.duration / 1000) : 100;
+      frames.push({ bitmap, durationMs: durMs });
+      totalDurationMs += durMs;
+      if (!naturalW) { naturalW = bitmap.width; naturalH = bitmap.height; }
+      vf.close();
+    }
+    decoder.close();
+    return { frames, totalDurationMs, naturalW, naturalH };
+  } catch (e) {
+    console.warn("Sticker animation decode failed for", url, e);
+    return null;
+  }
+}
+
+async function _setupAnimatedStickerFor(stickerId, url, node) {
+  const asset = await _decodeAnimatedSticker(url);
+  if (!asset) return;  // not animated, or decode failed — leaves static image in place
+  const canvas = document.createElement("canvas");
+  canvas.width  = asset.naturalW;
+  canvas.height = asset.naturalH;
+  const ctx = canvas.getContext("2d");
+  // Paint frame 0 immediately so we don't show a blank canvas before the loop starts.
+  ctx.drawImage(asset.frames[0].bitmap, 0, 0);
+  _animatedStickerAssets[stickerId] = {
+    canvas, ctx,
+    frames: asset.frames,
+    totalDurationMs: asset.totalDurationMs,
+    startTime: performance.now(),
+    lastFrameIdx: -1,
+  };
+  // Swap Konva source to our live canvas
+  node.image(canvas);
+  stickerLayer?.batchDraw();
+  _ensureStickerAnimationLoop();
+}
+
+function _disposeAnimatedSticker(stickerId) {
+  const asset = _animatedStickerAssets[stickerId];
+  if (!asset) return;
+  for (const f of asset.frames) f.bitmap.close?.();
+  delete _animatedStickerAssets[stickerId];
+}
+
+// RAF loop that advances each animated sticker's canvas to the right
+// frame based on elapsed wall-clock time. Konva re-reads from each
+// canvas on batchDraw and shows the latest frame.
+let _stickerRafId = null;
+function _isAnimatedStickerUrl(url) {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return lower.endsWith(".gif") || lower.endsWith(".webp");
+}
+function _ensureStickerAnimationLoop() {
+  if (_stickerRafId !== null) return;
+  if (!stickerLayer) return;
+  if (Object.keys(_animatedStickerAssets).length === 0) return;
+  const tick = () => {
+    const ids = Object.keys(_animatedStickerAssets);
+    if (ids.length === 0 || !stickerLayer) {
+      _stickerRafId = null;
+      return;
+    }
+    const now = performance.now();
+    let anyAdvanced = false;
+    for (const id of ids) {
+      const asset = _animatedStickerAssets[id];
+      const elapsed = (now - asset.startTime) % asset.totalDurationMs;
+      let acc = 0;
+      let frameIdx = 0;
+      for (let i = 0; i < asset.frames.length; i++) {
+        acc += asset.frames[i].durationMs;
+        if (elapsed < acc) { frameIdx = i; break; }
+      }
+      if (frameIdx !== asset.lastFrameIdx) {
+        asset.ctx.clearRect(0, 0, asset.canvas.width, asset.canvas.height);
+        asset.ctx.drawImage(asset.frames[frameIdx].bitmap, 0, 0);
+        asset.lastFrameIdx = frameIdx;
+        anyAdvanced = true;
+      }
+    }
+    if (anyAdvanced) stickerLayer.batchDraw();
+    _stickerRafId = requestAnimationFrame(tick);
+  };
+  _stickerRafId = requestAnimationFrame(tick);
+}
+
 function _stickerCenterPx(s) {
   return {
     x: (s.x + s.width  / 2) * GRID,
@@ -1884,12 +2018,16 @@ function addStickerToMap(sticker) {
   });
   stickerNodes[sticker.id] = node;
   stickerLayer.batchDraw();
+  if (_isAnimatedStickerUrl(sticker.image_url)) {
+    _setupAnimatedStickerFor(sticker.id, sticker.image_url, node);
+  }
 }
 window.addStickerToMap = addStickerToMap;
 
 function updateStickerOnMap(sticker) {
   const node = stickerNodes[sticker.id];
   if (!node) { addStickerToMap(sticker); return; }
+  const prev = stickerData[sticker.id];
   stickerData[sticker.id] = { ...sticker };
   const wPx = sticker.width  * GRID;
   const hPx = sticker.height * GRID;
@@ -1900,10 +2038,18 @@ function updateStickerOnMap(sticker) {
   node.x((sticker.x + sticker.width  / 2) * GRID);
   node.y((sticker.y + sticker.height / 2) * GRID);
   node.rotation(sticker.rotation || 0);
-  if (sticker.image_url) {
+  // Only reload the underlying image source if the URL actually changed.
+  // Important: don't clobber an animated sticker's live canvas with the
+  // static <img> on every move/rotate/resize.
+  const urlChanged = !prev || prev.image_url !== sticker.image_url;
+  if (urlChanged && sticker.image_url) {
+    _disposeAnimatedSticker(sticker.id);
     _loadStickerImage(sticker.image_url).then(img => {
       if (img) { node.image(img); stickerLayer.batchDraw(); }
     });
+    if (_isAnimatedStickerUrl(sticker.image_url)) {
+      _setupAnimatedStickerFor(sticker.id, sticker.image_url, node);
+    }
   }
   if (selectedStickerId === sticker.id) _updateStickerHandlePositions();
   stickerLayer.batchDraw();
@@ -1915,12 +2061,14 @@ function removeStickerFromMap(id) {
   const node = stickerNodes[id];
   if (node) { node.destroy(); delete stickerNodes[id]; }
   delete stickerData[id];
+  _disposeAnimatedSticker(id);
   stickerLayer?.batchDraw();
 }
 window.removeStickerFromMap = removeStickerFromMap;
 
 function clearStickersFromMap() {
   deselectSticker();
+  for (const id of Object.keys(_animatedStickerAssets)) _disposeAnimatedSticker(id);
   if (stickerLayer) stickerLayer.destroyChildren();
   Object.keys(stickerNodes).forEach(k => delete stickerNodes[k]);
   Object.keys(stickerData).forEach(k => delete stickerData[k]);
@@ -1931,6 +2079,12 @@ window.clearStickersFromMap = clearStickersFromMap;
 function selectSticker(id) {
   if (selectedStickerId === id) return;
   if (selectedStickerId) deselectSticker();
+  // Selecting a sticker clears any token or spell shape selection so
+  // the three selection modes stay mutually exclusive.
+  if (selectedTokenId || (selectedTokenIds && selectedTokenIds.size > 0)) {
+    deselectToken();
+  }
+  if (selectedSpellId) deselectSpellShape();
   const node = stickerNodes[id];
   if (!node) return;
   selectedStickerId = id;

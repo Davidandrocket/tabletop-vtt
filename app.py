@@ -11,7 +11,15 @@ import string
 import re
 import shutil
 import sqlite3
+import mimetypes
 import requests
+
+# Register MIME types missing from some platforms' default registry (notably
+# Windows, where mimetypes can return application/octet-stream for .webp/.svg).
+# ImageDecoder rejects octet-stream, breaking animated WebP stickers.
+mimetypes.add_type("image/webp", ".webp")
+mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("image/gif", ".gif")
 from flask import Flask, render_template, request, session, redirect, url_for
 from flask_socketio import SocketIO, join_room, emit
 from dotenv import load_dotenv

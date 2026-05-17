@@ -359,6 +359,20 @@ body.vtt { display: flex; flex-direction: column; }
   flex-wrap: wrap;
   max-width: 600px;
 }
+/* Players only see the sticker library in this panel — tuck it into the
+   top-right corner so it doesn't float orphaned in the middle. */
+body[data-role="player"] .map-controls-img {
+  top: 10px;
+  left: auto;
+  right: 10px;
+  transform: none;
+  max-width: 260px;
+}
+body[data-role="player"] .map-controls-img .map-profiles-section {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
 .map-profiles-section {
   width: 100%;
   border-top: 1px solid var(--border);
@@ -868,6 +882,74 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
   flex-shrink: 0;
 }
 .lib-delete:hover { color: var(--danger); }
+
+/* Sticker Library */
+.sticker-upload-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin: 6px 0;
+}
+.sticker-upload-row .profile-name-input { flex: 1; }
+.sticker-library-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+  gap: 6px;
+  margin-top: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.sticker-library-card {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px;
+  cursor: grab;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.sticker-library-card:hover {
+  background: rgba(255,255,255,0.08);
+  border-color: var(--accent2);
+}
+.sticker-library-card:active { cursor: grabbing; }
+.sticker-thumb {
+  width: 100%;
+  height: 48px;
+  object-fit: contain;
+  pointer-events: none;  /* let parent receive dragstart */
+}
+.sticker-lib-name {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+.sticker-library-card .lib-delete {
+  position: absolute;
+  top: -2px; right: -2px;
+  background: rgba(0,0,0,0.7);
+  border-radius: 50%;
+  width: 16px; height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 0.7rem;
+}
+.sticker-library-hint {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 6px;
+  font-style: italic;
+}
 
 /* Spell shape picker panel */
 .spell-picker {

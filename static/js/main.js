@@ -122,6 +122,14 @@ socket.on("session_state", (data) => {
     renderMapProfiles(data.map_profiles || [], data.active_profile_id ?? null);
     renderLibrary(data.token_library || []);
   }
+  // Sticker library is visible to all roles
+  renderStickerLibrary(data.sticker_library || []);
+
+  // Load placed stickers (visible to everyone)
+  window.clearStickersFromMap?.();
+  for (const sticker of (data.stickers || [])) {
+    window.addStickerToMap?.(sticker);
+  }
 
   // Chat history
   for (const msg of data.chat) {
@@ -1127,6 +1135,8 @@ function closeModal() {
 // --- HP editor ---
 
 function onTokenSelected(tokenId) {
+  // Mutually exclusive with sticker selection
+  if (window.deselectSticker) window.deselectSticker();
   selectedTokenId = tokenId;
   const editor = document.getElementById("token-hp-editor");
   const removeBtn = document.getElementById("remove-token-btn");
@@ -1481,26 +1491,122 @@ function saveCurrentTokenToLibrary() {
   });
 }
 
-// Drag library cards onto the map to spawn tokens
-if (ROLE === "dm") {
-  const mapContainer = document.getElementById("map-container");
-  if (mapContainer) {
-    mapContainer.addEventListener("dragover", (e) => {
-      if (Array.from(e.dataTransfer.types).includes("library_id")) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
-      }
-    });
-    mapContainer.addEventListener("drop", (e) => {
+// Drag library cards onto the map to spawn tokens (DM only) or stickers (everyone).
+const _mapContainer = document.getElementById("map-container");
+if (_mapContainer) {
+  _mapContainer.addEventListener("dragover", (e) => {
+    const types = Array.from(e.dataTransfer.types);
+    const isTokenDrag = types.includes("library_id");
+    const isStickerDrag = types.includes("sticker_library_id");
+    if ((isTokenDrag && ROLE === "dm") || isStickerDrag) {
       e.preventDefault();
-      const libraryId = e.dataTransfer.getData("library_id");
-      if (!libraryId) return;
-      const cell = window.clientCoordsToCell?.(e.clientX, e.clientY);
-      if (!cell) return;
+      e.dataTransfer.dropEffect = "copy";
+    }
+  });
+  _mapContainer.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const cell = window.clientCoordsToCell?.(e.clientX, e.clientY);
+    if (!cell) return;
+    const libraryId = e.dataTransfer.getData("library_id");
+    if (libraryId && ROLE === "dm") {
       socket.emit("spawn_library_token", { library_id: parseInt(libraryId), col: cell.col, row: cell.row });
+      return;
+    }
+    const stickerLibId = e.dataTransfer.getData("sticker_library_id");
+    if (stickerLibId) {
+      // Use the image's natural aspect ratio so the sticker isn't squished. Max dim = 2 cells.
+      const aspect = parseFloat(e.dataTransfer.getData("sticker_aspect")) || 1;
+      let width, height;
+      if (aspect >= 1) { width = 2; height = 2 / aspect; }
+      else             { width = 2 * aspect; height = 2; }
+      socket.emit("spawn_library_sticker", {
+        library_id: parseInt(stickerLibId),
+        col: cell.col, row: cell.row,
+        width, height,
+      });
+    }
+  });
+}
+
+// --- Sticker Library ---
+
+function renderStickerLibrary(entries) {
+  const list = document.getElementById("sticker-library-list");
+  if (!list) return;
+  if (!entries || entries.length === 0) {
+    list.innerHTML = '<div class="library-empty">No stickers yet. Upload one to start.</div>';
+    return;
+  }
+  list.innerHTML = "";
+  for (const entry of entries) {
+    const card = document.createElement("div");
+    card.className = "sticker-library-card";
+    card.draggable = true;
+    card.dataset.stickerLibraryId = entry.id;
+    card.title = "Drag onto map to place";
+    card.innerHTML = `
+      <img class="sticker-thumb" src="${entry.image_url}" alt="">
+      <span class="sticker-lib-name">${escapeHtml(entry.name)}</span>
+      <button class="lib-delete" onclick="deleteStickerLibraryEntry(${entry.id})" title="Delete">×</button>
+    `;
+    card.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("sticker_library_id", entry.id);
+      e.dataTransfer.effectAllowed = "copy";
+      // Capture natural aspect ratio so the spawned sticker matches the image
+      const img = card.querySelector("img.sticker-thumb");
+      const w = img?.naturalWidth, h = img?.naturalHeight;
+      if (w && h) e.dataTransfer.setData("sticker_aspect", String(w / h));
     });
+    list.appendChild(card);
   }
 }
+
+function deleteStickerLibraryEntry(id) {
+  if (!confirm("Remove this sticker from the library? (Existing placed copies on maps are not removed.)")) return;
+  socket.emit("delete_sticker_library_entry", { id });
+}
+window.deleteStickerLibraryEntry = deleteStickerLibraryEntry;
+
+// Sticker upload is open to everyone
+const stickerInput = document.getElementById("sticker-upload-input");
+if (stickerInput) {
+  stickerInput.addEventListener("change", async () => {
+    const file = stickerInput.files?.[0];
+    const errEl = document.getElementById("sticker-upload-error");
+    const nameEl = document.getElementById("sticker-name-input");
+    if (!file) return;
+    if (errEl) errEl.classList.add("hidden");
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const r = await fetch("/upload_sticker", { method: "POST", body: fd });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || "Upload failed");
+      const name = (nameEl?.value || "").trim() || file.name.replace(/\.[^.]+$/, "");
+      socket.emit("save_sticker_to_library", { name, image_url: data.url });
+      if (nameEl) nameEl.value = "";
+      stickerInput.value = "";
+    } catch (err) {
+      if (errEl) {
+        errEl.textContent = err.message || "Upload failed";
+        errEl.classList.remove("hidden");
+      }
+    }
+  });
+}
+
+socket.on("sticker_library_updated", (data) => {
+  renderStickerLibrary(data.entries || []);
+});
+
+// Sticker instance events (broadcast to everyone)
+socket.on("sticker_added",   (s) => window.addStickerToMap?.(s));
+socket.on("sticker_updated", (s) => window.updateStickerOnMap?.(s));
+socket.on("sticker_removed", (d) => window.removeStickerFromMap?.(d.id));
+socket.on("stickers_replaced", (data) => {
+  window.clearStickersFromMap?.();
+  for (const s of (data.stickers || [])) window.addStickerToMap?.(s);
+});
 
 let _clipboard = null; // { type: "tokens", items: [...] } | { type: "spell", shape: {...} }
 

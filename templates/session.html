@@ -153,9 +153,10 @@
       </div>
       {% endif %}
 
-      <!-- DM map image controls -->
-      {% if role == 'dm' %}
+      <!-- Map image / profile / library controls. DM has most; sticker
+           library is visible (and editable) for all roles. -->
       <div class="map-controls map-controls-img">
+        {% if role == 'dm' %}
         <input id="map-image-input" type="file" accept="image/*" class="map-file-input">
         <button id="upload-map-btn" class="btn-sm" onclick="uploadMapImage()">Upload</button>
         <span id="map-image-error" class="error-text hidden"></span>
@@ -196,8 +197,21 @@
             <div id="library-list"></div>
           </details>
         </div>
+        {% endif %}
+        <div class="map-profiles-section">
+          <details id="sticker-library-details">
+            <summary class="map-profiles-summary">Sticker Library</summary>
+            <div class="sticker-upload-row">
+              <input id="sticker-upload-input" type="file" accept=".png,.svg,.webp,.gif" style="display:none">
+              <input id="sticker-name-input" type="text" placeholder="Sticker name" maxlength="50" class="profile-name-input">
+              <button class="btn-sm btn-green" onclick="document.getElementById('sticker-upload-input').click()">Upload</button>
+            </div>
+            <div id="sticker-upload-error" class="error-text hidden"></div>
+            <div id="sticker-library-list" class="sticker-library-list"></div>
+            <div class="sticker-library-hint">Drag a sticker onto the map to place it.</div>
+          </details>
+        </div>
       </div>
-      {% endif %}
 
       <!-- Map tool buttons (always visible) -->
       <button id="spell-btn" class="btn-sm map-tool-btn map-spell-btn" onclick="toggleSpellMode()" title="Spell overlay (drag to draw AoE shapes)">

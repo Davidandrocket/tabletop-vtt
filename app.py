@@ -26,6 +26,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 DICECLOUD_BASE = "https://dicecloud.com/api"
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+ALLOWED_STICKER_EXTENSIONS = {"png", "svg", "webp", "gif"}
 
 
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -168,11 +169,20 @@ def init_db():
             ("origin_y",         "INTEGER DEFAULT 0"),
             ("preset",           "TEXT DEFAULT 'generic'"),
             ("tokens_json",      "TEXT DEFAULT '[]'"),
+            ("stickers_json",    "TEXT DEFAULT '[]'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE map_profiles ADD COLUMN {col} {defn}")
             except sqlite3.OperationalError:
                 pass
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sticker_library (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                name      TEXT    NOT NULL,
+                image_url TEXT    NOT NULL
+            )
+        """)
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS token_library (
@@ -329,6 +339,36 @@ def _autosave_active_profile_tokens(code, sess):
         )
 
 
+def _serialize_stickers_for_profile(sess):
+    """JSON list of all current session stickers."""
+    return json.dumps(list((sess.get("stickers") or {}).values()))
+
+
+def _replace_session_stickers(code, sess, stickers_data):
+    """Wipe and refill the session's stickers from a deserialized list, then
+    broadcast stickers_replaced so all clients rebuild their sticker layer."""
+    sess["stickers"] = {}
+    for s in stickers_data or []:
+        if not isinstance(s, dict) or "id" not in s:
+            continue
+        sess["stickers"][s["id"]] = s
+    emit("stickers_replaced", {
+        "stickers": list(sess["stickers"].values()),
+    }, room=code)
+
+
+def _autosave_active_profile_stickers(code, sess):
+    """If a profile is currently active, snapshot the live stickers into its row."""
+    pid = sess.get("active_profile_id")
+    if not pid:
+        return
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE map_profiles SET stickers_json = ? WHERE id = ? AND session_code = ?",
+            (_serialize_stickers_for_profile(sess), int(pid), code),
+        )
+
+
 def db_append_chat(msg, code):
     with get_db() as conn:
         conn.execute(
@@ -391,6 +431,7 @@ def db_load_session(code):
         },
         "chat": [json.loads(r["data"]) for r in reversed(chat_rows)],
         "spell_shapes": {},
+        "stickers": {},
         "active_profile_id": row["active_profile_id"],
         "fog": {(int(c[0]), int(c[1])) for c in json.loads(row["fog"] or "[]")},
         "procedural": None,  # filled below if the active profile is procedural
@@ -557,6 +598,14 @@ def db_load_library():
     return [dict(r) for r in rows]
 
 
+def db_load_sticker_library():
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM sticker_library ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def db_load_profiles(code):
     with get_db() as conn:
         rows = conn.execute(
@@ -703,6 +752,7 @@ def create_session():
         "map": {"cols": 20, "rows": 15, "grid_size": 50, "image_url": None, "offset_x": 0, "offset_y": 0, "scale_x": 1, "scale_y": 1},
         "chat": [],
         "spell_shapes": {},
+        "stickers": {},
         "active_profile_id": None,
         "fog": set(),
     }
@@ -815,6 +865,26 @@ def upload_map(code):
     return {"url": url}
 
 
+@app.route("/upload_sticker", methods=["POST"])
+def upload_sticker():
+    """Anyone in a session can upload a transparent PNG/SVG to the global
+    sticker library. Returns the URL for the client to include when creating
+    the library entry."""
+    sessions_map = session.get("sessions", {}) or {}
+    if not sessions_map:
+        return {"error": "Forbidden"}, 403
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return {"error": "No file provided"}, 400
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_STICKER_EXTENSIONS:
+        return {"error": "Invalid file type (png, svg, webp, gif only)"}, 400
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    filename = f"sticker_{uuid.uuid4().hex[:12]}.{ext}"
+    file.save(os.path.join(UPLOAD_FOLDER, filename))
+    return {"url": f"/static/uploads/{filename}"}
+
+
 # --- Socket events ---
 
 @socketio.on("connect")
@@ -873,10 +943,12 @@ def on_connect():
         "my_uuid": player_uuid,
         "party_characters": party_chars,
         "spell_shapes": list(sess.get("spell_shapes", {}).values()),
+        "stickers": list(sess.get("stickers", {}).values()),
         "map_profiles": db_load_profiles(code),
         "active_profile_id": sess.get("active_profile_id"),
         "fog": [list(c) for c in sess.get("fog", set())],
         "token_library": db_load_library() if role == "dm" else [],
+        "sticker_library": db_load_sticker_library(),  # visible to all
     })
     emit("player_joined", {"name": name, "role": role, "sid": request.sid, "uuid": player_uuid},
          room=code, include_self=False)
@@ -1458,11 +1530,12 @@ def on_save_map_profile(data):
 
     fog_list = [list(c) for c in sess.get("fog", set())]
     tokens_json = _serialize_tokens_for_profile(sess)
+    stickers_json = _serialize_stickers_for_profile(sess)
     with get_db() as conn:
         cursor = conn.execute("""
             INSERT INTO map_profiles
-                (session_code, name, image_url, offset_x, offset_y, scale_x, scale_y, cols, rows, fog, tokens_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (session_code, name, image_url, offset_x, offset_y, scale_x, scale_y, cols, rows, fog, tokens_json, stickers_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             code, name, image_url,
             current_map.get("offset_x", 0), current_map.get("offset_y", 0),
@@ -1470,6 +1543,7 @@ def on_save_map_profile(data):
             current_map.get("cols", 20), current_map.get("rows", 15),
             json.dumps(fog_list),
             tokens_json,
+            stickers_json,
         ))
         profile_id = cursor.lastrowid
 
@@ -1501,9 +1575,10 @@ def on_load_map_profile(data):
     if not row:
         return
 
-    # Snapshot current tokens into the previously-active profile (autosave).
+    # Snapshot current tokens + stickers into the previously-active profile.
     # Done before swapping active_profile_id so the snapshot lands on the right row.
     _autosave_active_profile_tokens(code, sess)
+    _autosave_active_profile_stickers(code, sess)
 
     fog_raw = json.loads(row["fog"] or "[]")
     kind = row["kind"] or "image"
@@ -1558,6 +1633,13 @@ def on_load_map_profile(data):
         target_tokens = []
     _replace_session_tokens(code, sess, target_tokens)
 
+    # And stickers (broadcasts stickers_replaced).
+    try:
+        target_stickers = json.loads(row["stickers_json"] or "[]")
+    except (TypeError, ValueError):
+        target_stickers = []
+    _replace_session_stickers(code, sess, target_stickers)
+
 
 @socketio.on("create_procedural_profile")
 def on_create_procedural_profile(data):
@@ -1589,9 +1671,10 @@ def on_create_procedural_profile(data):
 
     world = dungeon_gen.make_world(seed, preset_name=preset_name)
 
-    # Snapshot current tokens into the previously-active profile before
-    # we activate the new procedural one (which starts empty).
+    # Snapshot current tokens + stickers into the previously-active profile
+    # before activating the new procedural one (which starts empty).
     _autosave_active_profile_tokens(code, sess)
+    _autosave_active_profile_stickers(code, sess)
 
     with get_db() as conn:
         cursor = conn.execute("""
@@ -1636,9 +1719,10 @@ def on_create_procedural_profile(data):
         "active_profile_id": profile_id,
     }, room=code)
 
-    # Procedural dungeons start with no tokens. Replace clears the live
-    # tokens table for this session and broadcasts tokens_replaced.
+    # Procedural dungeons start with no tokens or stickers. Replace clears
+    # both and broadcasts the corresponding _replaced events.
     _replace_session_tokens(code, sess, [])
+    _replace_session_stickers(code, sess, [])
 
 
 def _chest_facing_from_neighbors(world, cell):
@@ -1989,6 +2073,177 @@ def on_spawn_library_token(data):
     db_upsert_token(token, code)
     emit_token_to_room("token_added", token, sess)
     _tick_and_broadcast_procedural(code)
+
+
+# Sticker Library (global, all roles)
+# Stickers are intentionally open to players too — they're meant for
+# collaborative scene-dressing. If a session needs to lock this down,
+# a per-session "players can use stickers" toggle would go here.
+
+@socketio.on("save_sticker_to_library")
+def on_save_sticker_to_library(data):
+    info = socket_info.get(request.sid)
+    if not info:
+        return
+    name = str(data.get("name", "Sticker")).strip()[:50] or "Sticker"
+    image_url = str(data.get("image_url", "")).strip()
+    if not image_url:
+        return
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO sticker_library (name, image_url) VALUES (?, ?)",
+            (name, image_url),
+        )
+    emit("sticker_library_updated", {"entries": db_load_sticker_library()}, room=info["code"])
+
+
+@socketio.on("rename_sticker_library_entry")
+def on_rename_sticker_library_entry(data):
+    info = socket_info.get(request.sid)
+    if not info:
+        return
+    entry_id = data.get("id")
+    name = str(data.get("name", "")).strip()[:50]
+    if entry_id is None or not name:
+        return
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE sticker_library SET name = ? WHERE id = ?",
+            (name, int(entry_id)),
+        )
+    emit("sticker_library_updated", {"entries": db_load_sticker_library()}, room=info["code"])
+
+
+@socketio.on("delete_sticker_library_entry")
+def on_delete_sticker_library_entry(data):
+    info = socket_info.get(request.sid)
+    if not info:
+        return
+    entry_id = data.get("id")
+    if entry_id is None:
+        return
+    # Look up the image_url so we can clean up the file if no other library
+    # entry references it. (Multiple entries can share a URL if a DM made
+    # duplicates, so check before deleting from disk.)
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT image_url FROM sticker_library WHERE id = ?", (int(entry_id),)
+        ).fetchone()
+        if not row:
+            return
+        conn.execute("DELETE FROM sticker_library WHERE id = ?", (int(entry_id),))
+        # Only delete the file if no other library row points to it
+        url = row["image_url"]
+        if url and url.startswith("/static/uploads/sticker_"):
+            still_used = conn.execute(
+                "SELECT 1 FROM sticker_library WHERE image_url = ? LIMIT 1", (url,)
+            ).fetchone()
+            if not still_used:
+                filename = url.rsplit("/", 1)[-1]
+                path = os.path.join(UPLOAD_FOLDER, filename)
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+    emit("sticker_library_updated", {"entries": db_load_sticker_library()}, room=info["code"])
+
+
+# Sticker instances (per-map, all roles can place/move/resize/rotate)
+
+def _make_sticker(*, library_id, image_url, name, x, y, width=2.0, height=2.0, rotation=0.0):
+    return {
+        "id": str(uuid.uuid4())[:8],
+        "library_id": library_id,
+        "image_url": image_url,
+        "name": name,
+        "x": float(x),
+        "y": float(y),
+        "width": float(width),
+        "height": float(height),
+        "rotation": float(rotation),
+    }
+
+
+@socketio.on("spawn_library_sticker")
+def on_spawn_library_sticker(data):
+    info = socket_info.get(request.sid)
+    if not info:
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    entry_id = data.get("library_id")
+    try:
+        col = float(data.get("col", 0))
+        row = float(data.get("row", 0))
+    except (TypeError, ValueError):
+        col, row = 0.0, 0.0
+    with get_db() as conn:
+        db_row = conn.execute(
+            "SELECT * FROM sticker_library WHERE id = ?", (int(entry_id),)
+        ).fetchone()
+    if not db_row:
+        return
+    try:
+        width = max(0.25, min(50.0, float(data.get("width", 2.0))))
+    except (TypeError, ValueError):
+        width = 2.0
+    try:
+        height = max(0.25, min(50.0, float(data.get("height", 2.0))))
+    except (TypeError, ValueError):
+        height = 2.0
+    sticker = _make_sticker(
+        library_id=int(entry_id),
+        image_url=db_row["image_url"],
+        name=db_row["name"],
+        x=col, y=row,
+        width=width, height=height,
+    )
+    sess.setdefault("stickers", {})[sticker["id"]] = sticker
+    emit("sticker_added", sticker, room=code)
+
+
+@socketio.on("update_sticker")
+def on_update_sticker(data):
+    info = socket_info.get(request.sid)
+    if not info:
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    sid = data.get("id")
+    stickers = sess.setdefault("stickers", {})
+    if sid not in stickers:
+        return
+    sticker = stickers[sid]
+    for field in ("x", "y", "width", "height", "rotation"):
+        if field in data:
+            try:
+                sticker[field] = float(data[field])
+            except (TypeError, ValueError):
+                pass
+    # Clamp size to sane bounds
+    sticker["width"]  = max(0.25, min(50.0, sticker["width"]))
+    sticker["height"] = max(0.25, min(50.0, sticker["height"]))
+    emit("sticker_updated", sticker, room=code)
+
+
+@socketio.on("remove_sticker")
+def on_remove_sticker(data):
+    info = socket_info.get(request.sid)
+    if not info:
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    sid = data.get("id")
+    stickers = sess.setdefault("stickers", {})
+    if sid in stickers:
+        del stickers[sid]
+        emit("sticker_removed", {"id": sid}, room=code)
 
 
 @socketio.on("roll_dice")

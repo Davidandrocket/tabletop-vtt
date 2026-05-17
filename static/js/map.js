@@ -119,11 +119,26 @@ window.applyTrapChange = applyTrapChange;
 // handler to know whether the shortcut applies.
 window.hasProceduralMap = () => proceduralBounds !== null;
 
-let stage, imageLayer, gridLayer, fogLayer, tokenLayer, selectionLayer, rulerLayer, pingLayer, spellLayer, cellLayer;
+let stage, imageLayer, gridLayer, fogLayer, tokenLayer, selectionLayer, rulerLayer, pingLayer, spellLayer, cellLayer, stickerLayer;
+// Stickers: decorative images placed on the map, draggable/rotatable/resizable by DM
+const stickerNodes  = {};  // sticker_id -> Konva.Image
+const stickerData   = {};  // sticker_id -> server-side sticker data
+let selectedStickerId = null;
+let stickerHandleNodes = [];  // [rotateHandle, resizeHandle] when something is selected
+const _stickerImageCache = {};  // url -> Promise<HTMLImageElement>
 // Bounding box of procedural cells in cell coords, or null when no procedural
 // map is active. renderFog reads this to extend the fog overlay past the
 // fixed cols/rows grid so a dungeon that grew off-grid still gets fogged.
 let proceduralBounds = null;
+// Spawn origin in cell coords for the currently active procedural map, or
+// null for image / no-map sessions. resetMapView centers on this. Set
+// fresh on every renderProceduralCells call.
+let proceduralOrigin = null;
+// Set by initMap; cleared after the first non-empty procedural render
+// auto-centers on spawn. Lets profile switches (which call initMap and
+// then later get cells via procedural_state) recenter exactly once
+// without re-centering on every subsequent tick broadcast.
+let _needsProceduralRecenter = false;
 let selectedTokenId = null;          // primary selected token (single-click or HP editor)
 let selectedTokenIds = new Set();    // all currently selected tokens
 const tokenNodes = {}; // token_id -> Konva.Group
@@ -161,6 +176,11 @@ let fogDragRect = null;
 function initMap(cols, rows) {
   currentCols = cols;
   currentRows = rows;
+  // Procedural maps want the camera centered on the spawn room rather than
+  // top-left. We can't do it here yet (the cell payload arrives separately
+  // via procedural_state); flag it so the next non-empty cell render runs
+  // resetMapView once.
+  _needsProceduralRecenter = true;
   const container = document.getElementById("map-container");
 
   // Clean up existing stage on reconnect so we don't double-render
@@ -169,11 +189,16 @@ function initMap(cols, rows) {
     Object.keys(tokenNodes).forEach(k => delete tokenNodes[k]);
     Object.keys(spellNodes).forEach(k => delete spellNodes[k]);
     Object.keys(spellData).forEach(k => delete spellData[k]);
+    Object.keys(stickerNodes).forEach(k => delete stickerNodes[k]);
+    Object.keys(stickerData).forEach(k => delete stickerData[k]);
     selectedSpellId = null;
     spellHandleNode = null;
+    selectedStickerId = null;
+    stickerHandleNodes = [];
     selectedTokenId = null;
     mapImageNode = null;
     cellLayer = null;
+    stickerLayer = null;
     fogDragStart = null;
     fogDragRect = null;
   }
@@ -194,8 +219,9 @@ function initMap(cols, rows) {
   // clicks and break stage-level handlers like chest-toggle and token
   // deselection in no-image / procedural sessions.
   gridLayer = new Konva.Layer({ listening: false });
-  cellLayer  = new Konva.Layer({ listening: false });  // procedural cells, painted over gridLayer
-  spellLayer = new Konva.Layer({ listening: false });
+  cellLayer    = new Konva.Layer({ listening: false });  // procedural cells, painted over gridLayer
+  stickerLayer = new Konva.Layer();  // decorative images, draggable for DM
+  spellLayer   = new Konva.Layer({ listening: false });
   tokenLayer = new Konva.Layer();
   fogLayer   = new Konva.Layer({ listening: false });
   selectionLayer = new Konva.Layer({ listening: false });
@@ -204,6 +230,7 @@ function initMap(cols, rows) {
   stage.add(imageLayer);
   stage.add(gridLayer);
   stage.add(cellLayer);
+  stage.add(stickerLayer);
   stage.add(spellLayer);
   stage.add(tokenLayer);
   stage.add(fogLayer);
@@ -405,8 +432,21 @@ function initMap(cols, rows) {
 }
 
 function resetMapView() {
-  stage.position({ x: 0, y: 0 });
+  if (!stage) return;
   stage.scale({ x: 1, y: 1 });
+  if (proceduralOrigin) {
+    // Center the spawn room (its visual middle is the corner where the
+    // four 2x2 marker cells meet, exactly at origin * GRID in pixels).
+    const container = document.getElementById("map-container");
+    const W = container.clientWidth || 800;
+    const H = container.clientHeight || 600;
+    stage.position({
+      x: W / 2 - proceduralOrigin.x * GRID,
+      y: H / 2 - proceduralOrigin.y * GRID,
+    });
+  } else {
+    stage.position({ x: 0, y: 0 });
+  }
   stage.batchDraw();
 }
 
@@ -424,12 +464,19 @@ function renderProceduralCells(payload) {
   cellLayer.destroyChildren();
   if (!payload || !payload.cells) {
     proceduralBounds = null;
+    proceduralOrigin = null;
     proceduralChests = {};
     proceduralChestsOpened = new Set();
     proceduralTraps = new Set();
     cellLayer.batchDraw();
     return;
   }
+  // Track origin so resetMapView (and the one-shot recenter below) can
+  // place the camera over the spawn room.
+  proceduralOrigin = (typeof payload.origin_x === "number"
+                      && typeof payload.origin_y === "number")
+    ? { x: payload.origin_x, y: payload.origin_y }
+    : null;
 
   // Track the bbox so fog rendering can cover cells past the fixed grid.
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -558,6 +605,15 @@ function renderProceduralCells(payload) {
   });
   cellLayer.add(cellShape);
   cellLayer.batchDraw();
+
+  // First non-empty render after a fresh initMap (session join or profile
+  // switch) auto-centers on the spawn room. Subsequent broadcasts (chest
+  // toggles, generation ticks) leave the camera alone so the user's pan
+  // isn't yanked back every reveal.
+  if (_needsProceduralRecenter && proceduralOrigin) {
+    _needsProceduralRecenter = false;
+    resetMapView();
+  }
 }
 window.renderProceduralCells = renderProceduralCells;
 
@@ -1755,3 +1811,325 @@ window.clientCoordsToCell = (clientX, clientY) => {
   const canvasY = (clientY - rect.top  - pos.y) / scale;
   return { col: Math.floor(canvasX / GRID), row: Math.floor(canvasY / GRID) };
 };
+
+
+// ───── Stickers ─────
+// Decorative images placed on the map. Render below spell shapes & tokens
+// (so creatures/AoE always appear on top). All roles can drag/rotate/resize/
+// delete — stickers are intentionally collaborative.
+
+const STICKER_HANDLE_SIZE = 12;
+const STICKER_HANDLE_GAP  = 18;  // distance from sticker edge to rotation handle
+
+function _loadStickerImage(url) {
+  if (!_stickerImageCache[url]) {
+    _stickerImageCache[url] = new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
+  }
+  return _stickerImageCache[url];
+}
+
+function _stickerCenterPx(s) {
+  return {
+    x: (s.x + s.width  / 2) * GRID,
+    y: (s.y + s.height / 2) * GRID,
+  };
+}
+
+function addStickerToMap(sticker) {
+  if (!stickerLayer) return;
+  // Replace if already present (sticker_added after redraw)
+  if (stickerNodes[sticker.id]) {
+    updateStickerOnMap(sticker);
+    return;
+  }
+  stickerData[sticker.id] = { ...sticker };
+  const node = new Konva.Image({
+    image: null,  // set when loaded
+    width:  sticker.width  * GRID,
+    height: sticker.height * GRID,
+    offsetX: (sticker.width  * GRID) / 2,
+    offsetY: (sticker.height * GRID) / 2,
+    x: (sticker.x + sticker.width  / 2) * GRID,
+    y: (sticker.y + sticker.height / 2) * GRID,
+    rotation: sticker.rotation || 0,
+    draggable: true,
+    listening: true,
+    name: `sticker-${sticker.id}`,
+  });
+  node._stickerId = sticker.id;
+  stickerLayer.add(node);
+  _loadStickerImage(sticker.image_url).then(img => {
+    if (img) { node.image(img); stickerLayer.batchDraw(); }
+  });
+  node.on("click tap", (e) => {
+    e.cancelBubble = true;
+    selectSticker(sticker.id);
+  });
+  node.on("dragend", () => {
+    const s = stickerData[sticker.id];
+    if (!s) return;
+    const newX = node.x() / GRID - s.width  / 2;
+    const newY = node.y() / GRID - s.height / 2;
+    s.x = newX; s.y = newY;
+    window.socketEmit?.("update_sticker", { id: sticker.id, x: newX, y: newY });
+    if (selectedStickerId === sticker.id) _updateStickerHandlePositions();
+  });
+  node.on("dragmove", () => {
+    if (selectedStickerId === sticker.id) _updateStickerHandlePositions();
+  });
+  stickerNodes[sticker.id] = node;
+  stickerLayer.batchDraw();
+}
+window.addStickerToMap = addStickerToMap;
+
+function updateStickerOnMap(sticker) {
+  const node = stickerNodes[sticker.id];
+  if (!node) { addStickerToMap(sticker); return; }
+  stickerData[sticker.id] = { ...sticker };
+  const wPx = sticker.width  * GRID;
+  const hPx = sticker.height * GRID;
+  node.width(wPx);
+  node.height(hPx);
+  node.offsetX(wPx / 2);
+  node.offsetY(hPx / 2);
+  node.x((sticker.x + sticker.width  / 2) * GRID);
+  node.y((sticker.y + sticker.height / 2) * GRID);
+  node.rotation(sticker.rotation || 0);
+  if (sticker.image_url) {
+    _loadStickerImage(sticker.image_url).then(img => {
+      if (img) { node.image(img); stickerLayer.batchDraw(); }
+    });
+  }
+  if (selectedStickerId === sticker.id) _updateStickerHandlePositions();
+  stickerLayer.batchDraw();
+}
+window.updateStickerOnMap = updateStickerOnMap;
+
+function removeStickerFromMap(id) {
+  if (selectedStickerId === id) deselectSticker();
+  const node = stickerNodes[id];
+  if (node) { node.destroy(); delete stickerNodes[id]; }
+  delete stickerData[id];
+  stickerLayer?.batchDraw();
+}
+window.removeStickerFromMap = removeStickerFromMap;
+
+function clearStickersFromMap() {
+  deselectSticker();
+  if (stickerLayer) stickerLayer.destroyChildren();
+  Object.keys(stickerNodes).forEach(k => delete stickerNodes[k]);
+  Object.keys(stickerData).forEach(k => delete stickerData[k]);
+  stickerLayer?.batchDraw();
+}
+window.clearStickersFromMap = clearStickersFromMap;
+
+function selectSticker(id) {
+  if (selectedStickerId === id) return;
+  if (selectedStickerId) deselectSticker();
+  const node = stickerNodes[id];
+  if (!node) return;
+  selectedStickerId = id;
+  node.stroke("#4a90d9");
+  node.strokeWidth(2);
+  _addStickerHandles(id);
+  stickerLayer.batchDraw();
+}
+window.selectSticker = selectSticker;
+
+function deselectSticker() {
+  if (!selectedStickerId) return;
+  const node = stickerNodes[selectedStickerId];
+  if (node) {
+    node.stroke(null);
+    node.strokeWidth(0);
+  }
+  for (const h of stickerHandleNodes) h.destroy();
+  stickerHandleNodes = [];
+  selectedStickerId = null;
+  stickerLayer?.batchDraw();
+}
+window.deselectSticker = deselectSticker;
+
+function _addStickerHandles(id) {
+  for (const h of stickerHandleNodes) h.destroy();
+  stickerHandleNodes = [];
+  const s = stickerData[id];
+  if (!s) return;
+
+  // Rotation handle — green circle above sticker
+  const rot = new Konva.Circle({
+    radius: STICKER_HANDLE_SIZE / 2,
+    fill: "#2e7d32", stroke: "#fff", strokeWidth: 1.5,
+    draggable: true, name: "sticker-rot-handle",
+  });
+  // Resize handle — blue square at bottom-right corner
+  const res = new Konva.Rect({
+    width: STICKER_HANDLE_SIZE, height: STICKER_HANDLE_SIZE,
+    offsetX: STICKER_HANDLE_SIZE / 2, offsetY: STICKER_HANDLE_SIZE / 2,
+    fill: "#4a90d9", stroke: "#fff", strokeWidth: 1.5,
+    cornerRadius: 2,
+    draggable: true, name: "sticker-resize-handle",
+  });
+  rot.on("mouseover", () => { document.body.style.cursor = "grab"; });
+  rot.on("mouseout",  () => { document.body.style.cursor = "default"; });
+  res.on("mouseover", () => { document.body.style.cursor = "nwse-resize"; });
+  res.on("mouseout",  () => { document.body.style.cursor = "default"; });
+
+  // Rotation handle drag: follow cursor freely (don't reset its position
+  // mid-drag), compute the sticker's rotation from the handle's angle
+  // around center. _updateStickerHandlePositions only touches the resize
+  // handle during a rotation drag to avoid fighting Konva's drag.
+  rot.on("dragmove", () => {
+    const cur = stickerData[selectedStickerId];
+    if (!cur) return;
+    const c = _stickerCenterPx(cur);
+    const dx = rot.x() - c.x;
+    const dy = rot.y() - c.y;
+    // Rotation handle's "natural" position is above center (angle = -90°).
+    const angleDeg = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+    cur.rotation = angleDeg;
+    const node = stickerNodes[selectedStickerId];
+    node.rotation(angleDeg);
+    _updateStickerHandlePositions({ skipRotate: true });
+    stickerLayer.batchDraw();
+  });
+  rot.on("dragend", () => {
+    const cur = stickerData[selectedStickerId];
+    if (!cur) return;
+    window.socketEmit?.("update_sticker", { id: selectedStickerId, rotation: cur.rotation });
+    _updateStickerHandlePositions();  // snap to canonical
+  });
+
+  // Resize handle drag. Capture both starting dimensions AND a fixed
+  // center reference at dragstart. Using a static center prevents the
+  // feedback loop where mutating cur.width mid-drag shifts the center
+  // mid-frame and creates jitter. cur.x / cur.y also get updated each
+  // tick to keep the center anchored, so the server roundtrip on
+  // dragend doesn't snap the sticker to a different position.
+  let _resizeStart = null;
+  res.on("dragstart", () => {
+    const cur = stickerData[selectedStickerId];
+    if (!cur) { _resizeStart = null; return; }
+    _resizeStart = {
+      width: cur.width,
+      height: cur.height,
+      halfWPx: cur.width  * GRID / 2,
+      halfHPx: cur.height * GRID / 2,
+      // Fixed center in stage px — does NOT recompute each frame
+      centerXPx: (cur.x + cur.width  / 2) * GRID,
+      centerYPx: (cur.y + cur.height / 2) * GRID,
+      rotationRad: cur.rotation * Math.PI / 180,
+    };
+  });
+  res.on("dragmove", (e) => {
+    const cur = stickerData[selectedStickerId];
+    if (!cur || !_resizeStart) return;
+    const dx = res.x() - _resizeStart.centerXPx;
+    const dy = res.y() - _resizeStart.centerYPx;
+    // Unrotate into the sticker's local frame
+    const angRad = -_resizeStart.rotationRad;
+    const cosA = Math.cos(angRad);
+    const sinA = Math.sin(angRad);
+    const localDx = dx * cosA - dy * sinA;
+    const localDy = dx * sinA + dy * cosA;
+    let newWidth, newHeight;
+    const freeResize = !!(e.evt && e.evt.shiftKey);
+    if (freeResize) {
+      newWidth  = (2 * localDx) / GRID;
+      newHeight = (2 * localDy) / GRID;
+    } else {
+      // Aspect-locked — dominant axis drives both, preserving start ratio
+      const sx = localDx / _resizeStart.halfWPx;
+      const sy = localDy / _resizeStart.halfHPx;
+      const scale = Math.max(sx, sy);
+      newWidth  = _resizeStart.width  * scale;
+      newHeight = _resizeStart.height * scale;
+    }
+    newWidth  = Math.max(0.25, Math.min(50, newWidth));
+    newHeight = Math.max(0.25, Math.min(50, newHeight));
+    cur.width  = newWidth;
+    cur.height = newHeight;
+    // Update x/y so the CENTER stays anchored to the dragstart center.
+    // This keeps the model consistent with what the user sees and
+    // prevents the snap-back when the server echoes back the update.
+    cur.x = _resizeStart.centerXPx / GRID - newWidth  / 2;
+    cur.y = _resizeStart.centerYPx / GRID - newHeight / 2;
+    const node = stickerNodes[selectedStickerId];
+    const wPx = newWidth  * GRID, hPx = newHeight * GRID;
+    node.width(wPx);
+    node.height(hPx);
+    node.offsetX(wPx / 2);
+    node.offsetY(hPx / 2);
+    // node.x() / node.y() = center, unchanged (still the dragstart center)
+    node.x(_resizeStart.centerXPx);
+    node.y(_resizeStart.centerYPx);
+    _updateStickerHandlePositions({ skipResize: true });
+    stickerLayer.batchDraw();
+  });
+  res.on("dragend", () => {
+    _resizeStart = null;
+    const cur = stickerData[selectedStickerId];
+    if (!cur) return;
+    window.socketEmit?.("update_sticker", {
+      id: selectedStickerId,
+      x: cur.x, y: cur.y,
+      width: cur.width, height: cur.height,
+    });
+    _updateStickerHandlePositions();  // snap resize handle back to corner
+  });
+
+  stickerLayer.add(rot);
+  stickerLayer.add(res);
+  stickerHandleNodes = [rot, res];
+  _updateStickerHandlePositions();
+}
+
+function _updateStickerHandlePositions(opts) {
+  if (!selectedStickerId || stickerHandleNodes.length < 2) return;
+  const s = stickerData[selectedStickerId];
+  if (!s) return;
+  const skipRotate = !!(opts && opts.skipRotate);
+  const skipResize = !!(opts && opts.skipResize);
+  const c = _stickerCenterPx(s);
+  const halfW = s.width  * GRID / 2;
+  const halfH = s.height * GRID / 2;
+  const angRad = s.rotation * Math.PI / 180;
+  const cosA = Math.cos(angRad);
+  const sinA = Math.sin(angRad);
+
+  if (!skipRotate) {
+    // Rotation handle: local (0, -halfH - GAP) → rotate → add center
+    const rotLocalY = -halfH - STICKER_HANDLE_GAP;
+    const rotX = c.x + (0 * cosA - rotLocalY * sinA);
+    const rotY = c.y + (0 * sinA + rotLocalY * cosA);
+    stickerHandleNodes[0].x(rotX);
+    stickerHandleNodes[0].y(rotY);
+  }
+  if (!skipResize) {
+    // Resize handle: local (halfW, halfH) → rotate → add center
+    const resX = c.x + (halfW * cosA - halfH * sinA);
+    const resY = c.y + (halfW * sinA + halfH * cosA);
+    stickerHandleNodes[1].x(resX);
+    stickerHandleNodes[1].y(resY);
+  }
+}
+
+// Delete selected sticker on Del / Backspace (any role, no input focused)
+window.addEventListener("keydown", (e) => {
+  if (!selectedStickerId) return;
+  const tag = document.activeElement?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable) return;
+  if (e.key === "Delete" || e.key === "Backspace") {
+    e.preventDefault();
+    const id = selectedStickerId;
+    window.socketEmit?.("remove_sticker", { id });
+  }
+});
+
+// Note: main.js's onTokenSelected calls deselectSticker() to keep token
+// and sticker selection mutually exclusive. No need to wrap from here.

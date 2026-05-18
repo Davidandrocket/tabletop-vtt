@@ -147,7 +147,8 @@ def init_db():
             ("active_profile_id","INTEGER"),
             ("fog",              "TEXT DEFAULT '[]'"),
             ("current_round",    "INTEGER DEFAULT 0"),
-            ("players_can_use_stickers", "INTEGER DEFAULT 1"),
+            ("players_can_use_stickers",    "INTEGER DEFAULT 1"),  # players can add / upload stickers
+            ("players_can_modify_stickers", "INTEGER DEFAULT 1"),  # players can move / rotate / resize / remove placed stickers
         ]:
             try:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
@@ -251,8 +252,9 @@ def db_save_session(code):
             INSERT OR REPLACE INTO sessions
                 (code, dm_name, map_cols, map_rows, initiative_order, current_turn,
                  map_image_url, map_offset_x, map_offset_y, map_image_scale, map_image_scale_y,
-                 active_profile_id, fog, current_round, players_can_use_stickers)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 active_profile_id, fog, current_round,
+                 players_can_use_stickers, players_can_modify_stickers)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             code,
             sess["dm_name"],
@@ -268,7 +270,8 @@ def db_save_session(code):
             sess.get("active_profile_id"),
             json.dumps(fog_list),
             sess.get("current_round", 0),
-            1 if sess.get("players_can_use_stickers", True) else 0,
+            1 if sess.get("players_can_use_stickers",    True) else 0,
+            1 if sess.get("players_can_modify_stickers", True) else 0,
         ))
 
 
@@ -431,7 +434,8 @@ def db_load_session(code):
         "initiative_order": json.loads(row["initiative_order"] or "[]"),
         "current_turn": row["current_turn"],
         "current_round": row["current_round"] or 0,
-        "players_can_use_stickers": bool(row["players_can_use_stickers"] if row["players_can_use_stickers"] is not None else 1),
+        "players_can_use_stickers":    bool(row["players_can_use_stickers"]    if row["players_can_use_stickers"]    is not None else 1),
+        "players_can_modify_stickers": bool(row["players_can_modify_stickers"] if row["players_can_modify_stickers"] is not None else 1),
         "map": {
             "cols": row["map_cols"], "rows": row["map_rows"], "grid_size": 50,
             "image_url": row["map_image_url"],
@@ -761,6 +765,7 @@ def create_session():
         "current_turn": -1,
         "current_round": 0,
         "players_can_use_stickers": True,
+        "players_can_modify_stickers": True,
         "map": {"cols": 20, "rows": 15, "grid_size": 50, "image_url": None, "offset_x": 0, "offset_y": 0, "scale_x": 1, "scale_y": 1},
         "chat": [],
         "spell_shapes": {},
@@ -887,7 +892,7 @@ def upload_sticker():
         return {"error": "Forbidden"}, 403
     is_dm_somewhere = any(entry.get("role") == "dm" for entry in sessions_map.values())
     if not is_dm_somewhere:
-        # Player — require at least one of their sessions to allow stickers
+        # Player — require at least one of their sessions to allow sticker-adding
         allowed = False
         for code, _entry in sessions_map.items():
             sess = sessions.get(code)
@@ -895,7 +900,7 @@ def upload_sticker():
                 allowed = True
                 break
         if not allowed:
-            return {"error": "Stickers are locked by the DM in your session(s)"}, 403
+            return {"error": "Adding stickers is locked by the DM in your session(s)"}, 403
     file = request.files.get("file")
     if not file or not file.filename:
         return {"error": "No file provided"}, 400
@@ -972,7 +977,8 @@ def on_connect():
         "fog": [list(c) for c in sess.get("fog", set())],
         "token_library": db_load_library() if role == "dm" else [],
         "sticker_library": db_load_sticker_library(),  # visible to all
-        "players_can_use_stickers": bool(sess.get("players_can_use_stickers", True)),
+        "players_can_use_stickers":    bool(sess.get("players_can_use_stickers",    True)),
+        "players_can_modify_stickers": bool(sess.get("players_can_modify_stickers", True)),
     })
     emit("player_joined", {"name": name, "role": role, "sid": request.sid, "uuid": player_uuid},
          room=code, include_self=False)
@@ -2100,17 +2106,36 @@ def on_spawn_library_token(data):
 
 
 # Sticker Library (global, default open to all roles)
-# DMs can lock stickers down with a per-session toggle (players_can_use_stickers).
-# When false, only the DM can add/modify/remove stickers and library entries;
-# players retain read-only view of placed stickers and the library.
+# Two DM-controlled per-session toggles:
+#   players_can_use_stickers    — can players UPLOAD / ADD / SPAWN stickers?
+#   players_can_modify_stickers — can players MOVE / ROTATE / RESIZE / REMOVE
+#                                 placed stickers (e.g. for DM-placed vehicle
+#                                 tokens that players still need to drive)?
+# When a toggle is false, the DM can still do the corresponding action.
 
-def _sticker_action_allowed(info, sess):
-    """True if this socket may add/modify/delete stickers in this session."""
+def _sticker_add_allowed(info, sess):
+    """True if this socket may add stickers to the library / spawn them on the map."""
     if not info or not sess:
         return False
     if info.get("role") == "dm":
         return True
     return bool(sess.get("players_can_use_stickers", True))
+
+
+def _sticker_modify_allowed(info, sess):
+    """True if this socket may move / rotate / resize / remove placed stickers."""
+    if not info or not sess:
+        return False
+    if info.get("role") == "dm":
+        return True
+    return bool(sess.get("players_can_modify_stickers", True))
+
+
+def _broadcast_sticker_perms(code, sess):
+    emit("sticker_permissions_updated", {
+        "players_can_use_stickers":    bool(sess.get("players_can_use_stickers",    True)),
+        "players_can_modify_stickers": bool(sess.get("players_can_modify_stickers", True)),
+    }, room=code)
 
 
 @socketio.on("set_players_can_use_stickers")
@@ -2122,17 +2147,30 @@ def on_set_players_can_use_stickers(data):
     sess = sessions.get(code)
     if not sess:
         return
-    val = bool(data.get("value", True))
-    sess["players_can_use_stickers"] = val
+    sess["players_can_use_stickers"] = bool(data.get("value", True))
     db_save_session(code)
-    emit("players_can_use_stickers_updated", {"value": val}, room=code)
+    _broadcast_sticker_perms(code, sess)
+
+
+@socketio.on("set_players_can_modify_stickers")
+def on_set_players_can_modify_stickers(data):
+    info = socket_info.get(request.sid)
+    if not info or info["role"] != "dm":
+        return
+    code = info["code"]
+    sess = sessions.get(code)
+    if not sess:
+        return
+    sess["players_can_modify_stickers"] = bool(data.get("value", True))
+    db_save_session(code)
+    _broadcast_sticker_perms(code, sess)
 
 @socketio.on("save_sticker_to_library")
 def on_save_sticker_to_library(data):
     info = socket_info.get(request.sid)
     if not info:
         return
-    if not _sticker_action_allowed(info, sessions.get(info["code"])):
+    if not _sticker_add_allowed(info, sessions.get(info["code"])):
         return
     name = str(data.get("name", "Sticker")).strip()[:50] or "Sticker"
     image_url = str(data.get("image_url", "")).strip()
@@ -2151,7 +2189,7 @@ def on_rename_sticker_library_entry(data):
     info = socket_info.get(request.sid)
     if not info:
         return
-    if not _sticker_action_allowed(info, sessions.get(info["code"])):
+    if not _sticker_add_allowed(info, sessions.get(info["code"])):
         return
     entry_id = data.get("id")
     name = str(data.get("name", "")).strip()[:50]
@@ -2170,7 +2208,7 @@ def on_delete_sticker_library_entry(data):
     info = socket_info.get(request.sid)
     if not info:
         return
-    if not _sticker_action_allowed(info, sessions.get(info["code"])):
+    if not _sticker_add_allowed(info, sessions.get(info["code"])):
         return
     entry_id = data.get("id")
     if entry_id is None:
@@ -2226,7 +2264,7 @@ def on_spawn_library_sticker(data):
     sess = sessions.get(code)
     if not sess:
         return
-    if not _sticker_action_allowed(info, sess):
+    if not _sticker_add_allowed(info, sess):
         return
     entry_id = data.get("library_id")
     try:
@@ -2268,7 +2306,7 @@ def on_update_sticker(data):
     sess = sessions.get(code)
     if not sess:
         return
-    if not _sticker_action_allowed(info, sess):
+    if not _sticker_modify_allowed(info, sess):
         return
     sid = data.get("id")
     stickers = sess.setdefault("stickers", {})
@@ -2296,7 +2334,7 @@ def on_remove_sticker(data):
     sess = sessions.get(code)
     if not sess:
         return
-    if not _sticker_action_allowed(info, sess):
+    if not _sticker_modify_allowed(info, sess):
         return
     sid = data.get("id")
     stickers = sess.setdefault("stickers", {})

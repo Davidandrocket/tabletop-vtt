@@ -202,10 +202,16 @@
           <details id="sticker-library-details">
             <summary class="map-profiles-summary">Sticker Library</summary>
             {% if role == 'dm' %}
-            <label class="sticker-perm-row" title="Allow players to upload, add, move, resize and remove stickers">
-              <input id="sticker-players-toggle" type="checkbox" checked>
-              <span>Players can use stickers</span>
-            </label>
+            <div class="sticker-perm-block">
+              <label class="sticker-perm-row" title="Allow players to upload to the library and place new stickers on the map">
+                <input id="sticker-add-toggle" type="checkbox" checked>
+                <span>Players can add/upload stickers</span>
+              </label>
+              <label class="sticker-perm-row" title="Allow players to move, rotate, resize, and remove placed stickers (e.g. for player-controlled vehicle tokens)">
+                <input id="sticker-modify-toggle" type="checkbox" checked>
+                <span>Players can move stickers</span>
+              </label>
+            </div>
             {% endif %}
             <div class="sticker-upload-row">
               <input id="sticker-upload-input" type="file" accept=".png,.svg,.webp,.gif" style="display:none">

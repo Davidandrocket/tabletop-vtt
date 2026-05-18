@@ -1982,10 +1982,11 @@ function addStickerToMap(sticker) {
     return;
   }
   stickerData[sticker.id] = { ...sticker };
-  // Honor the DM's sticker-permission toggle when creating the node for players
+  // Whether placed stickers are interactive depends on the "modify" toggle
+  // (distinct from the "add/upload" toggle). DMs are always interactive.
   const isDM = document.body.dataset.role === "dm";
-  const playerCanUse = window._playersCanUseStickers !== false;
-  const interactive = isDM || playerCanUse;
+  const playerCanModify = window._playersCanModifyStickers !== false;
+  const interactive = isDM || playerCanModify;
   const node = new Konva.Image({
     image: null,  // set when loaded
     width:  sticker.width  * GRID,

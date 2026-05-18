@@ -193,6 +193,13 @@ def init_db():
                 image_url TEXT    NOT NULL
             )
         """)
+        for col, defn in [
+            ("default_size", "REAL DEFAULT 2.0"),  # max-dim cells used at spawn time
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE sticker_library ADD COLUMN {col} {defn}")
+            except sqlite3.OperationalError:
+                pass
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS token_library (
@@ -2176,29 +2183,49 @@ def on_save_sticker_to_library(data):
     image_url = str(data.get("image_url", "")).strip()
     if not image_url:
         return
+    try:
+        default_size = max(0.25, min(50.0, float(data.get("default_size", 2.0))))
+    except (TypeError, ValueError):
+        default_size = 2.0
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO sticker_library (name, image_url) VALUES (?, ?)",
-            (name, image_url),
+            "INSERT INTO sticker_library (name, image_url, default_size) VALUES (?, ?, ?)",
+            (name, image_url, default_size),
         )
     emit("sticker_library_updated", {"entries": db_load_sticker_library()}, room=info["code"])
 
 
 @socketio.on("rename_sticker_library_entry")
 def on_rename_sticker_library_entry(data):
+    """Update a sticker library entry's name and/or default_size. At least
+    one must be provided. (Name is left unchanged if blank.)"""
     info = socket_info.get(request.sid)
     if not info:
         return
     if not _sticker_add_allowed(info, sessions.get(info["code"])):
         return
     entry_id = data.get("id")
-    name = str(data.get("name", "")).strip()[:50]
-    if entry_id is None or not name:
+    if entry_id is None:
         return
+    name = str(data.get("name", "")).strip()[:50] if "name" in data else None
+    default_size = None
+    if "default_size" in data:
+        try:
+            default_size = max(0.25, min(50.0, float(data["default_size"])))
+        except (TypeError, ValueError):
+            default_size = None
+    sets, vals = [], []
+    if name:
+        sets.append("name = ?"); vals.append(name)
+    if default_size is not None:
+        sets.append("default_size = ?"); vals.append(default_size)
+    if not sets:
+        return
+    vals.append(int(entry_id))
     with get_db() as conn:
         conn.execute(
-            "UPDATE sticker_library SET name = ? WHERE id = ?",
-            (name, int(entry_id)),
+            f"UPDATE sticker_library SET {', '.join(sets)} WHERE id = ?",
+            tuple(vals),
         )
     emit("sticker_library_updated", {"entries": db_load_sticker_library()}, room=info["code"])
 
@@ -2241,7 +2268,7 @@ def on_delete_sticker_library_entry(data):
 
 # Sticker instances (per-map, all roles can place/move/resize/rotate)
 
-def _make_sticker(*, library_id, image_url, name, x, y, width=2.0, height=2.0, rotation=0.0):
+def _make_sticker(*, library_id, image_url, name, x, y, width=2.0, height=2.0, rotation=0.0, locked=False):
     return {
         "id": str(uuid.uuid4())[:8],
         "library_id": library_id,
@@ -2252,6 +2279,7 @@ def _make_sticker(*, library_id, image_url, name, x, y, width=2.0, height=2.0, r
         "width": float(width),
         "height": float(height),
         "rotation": float(rotation),
+        "locked": bool(locked),
     }
 
 
@@ -2313,12 +2341,19 @@ def on_update_sticker(data):
     if sid not in stickers:
         return
     sticker = stickers[sid]
+    is_dm = info.get("role") == "dm"
+    # Locked stickers can only be modified by the DM. (DM can also unlock here.)
+    if sticker.get("locked") and not is_dm:
+        return
     for field in ("x", "y", "width", "height", "rotation"):
         if field in data:
             try:
                 sticker[field] = float(data[field])
             except (TypeError, ValueError):
                 pass
+    # Only the DM can flip the lock state.
+    if "locked" in data and is_dm:
+        sticker["locked"] = bool(data["locked"])
     # Clamp size to sane bounds
     sticker["width"]  = max(0.25, min(50.0, sticker["width"]))
     sticker["height"] = max(0.25, min(50.0, sticker["height"]))
@@ -2334,13 +2369,20 @@ def on_remove_sticker(data):
     sess = sessions.get(code)
     if not sess:
         return
-    if not _sticker_modify_allowed(info, sess):
+    # Removing a placed sticker is gated by the *add* permission, not modify —
+    # players driving a DM-placed vehicle sticker should be able to move it
+    # but not delete it out from under the DM.
+    if not _sticker_add_allowed(info, sess):
         return
     sid = data.get("id")
     stickers = sess.setdefault("stickers", {})
-    if sid in stickers:
-        del stickers[sid]
-        emit("sticker_removed", {"id": sid}, room=code)
+    if sid not in stickers:
+        return
+    # Locked stickers can only be removed by the DM, regardless of permission.
+    if stickers[sid].get("locked") and info.get("role") != "dm":
+        return
+    del stickers[sid]
+    emit("sticker_removed", {"id": sid}, room=code)
 
 
 @socketio.on("roll_dice")

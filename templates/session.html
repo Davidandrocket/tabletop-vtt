@@ -216,6 +216,7 @@
             <div class="sticker-upload-row">
               <input id="sticker-upload-input" type="file" accept=".png,.svg,.webp,.gif" style="display:none">
               <input id="sticker-name-input" type="text" placeholder="Sticker name" maxlength="50" class="profile-name-input">
+              <input id="sticker-default-size-input" type="number" min="0.25" max="50" step="0.25" value="2" title="Default size in cells when placed (max dimension)" class="profile-name-input" style="width:54px;flex:0 0 54px;">
               <button id="sticker-upload-btn" class="btn-sm btn-green" onclick="document.getElementById('sticker-upload-input').click()">Upload</button>
             </div>
             <div id="sticker-upload-error" class="error-text hidden"></div>
@@ -317,6 +318,7 @@
             <button class="adv-reset" onclick="resetAdvantage()" title="Reset to normal">↺</button>
           </div>
           <div class="dice-presets">
+            <button onclick="quickRoll('1d2')">d2</button>
             <button onclick="quickRoll('1d4')">d4</button>
             <button onclick="quickRoll('1d6')">d6</button>
             <button onclick="quickRoll('1d8')">d8</button>

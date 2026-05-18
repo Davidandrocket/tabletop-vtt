@@ -1982,11 +1982,12 @@ function addStickerToMap(sticker) {
     return;
   }
   stickerData[sticker.id] = { ...sticker };
-  // Whether placed stickers are interactive depends on the "modify" toggle
-  // (distinct from the "add/upload" toggle). DMs are always interactive.
+  // Interactivity rules:
+  //  - DM always interactive.
+  //  - Players: must have modify permission AND sticker not locked.
   const isDM = document.body.dataset.role === "dm";
   const playerCanModify = window._playersCanModifyStickers !== false;
-  const interactive = isDM || playerCanModify;
+  const interactive = isDM || (playerCanModify && !sticker.locked);
   const node = new Konva.Image({
     image: null,  // set when loaded
     width:  sticker.width  * GRID,
@@ -2002,6 +2003,28 @@ function addStickerToMap(sticker) {
   });
   node._stickerId = sticker.id;
   stickerLayer.add(node);
+  // Locked indicator: thin dashed yellow shown only on DM hover. Players
+  // never see anything (just the lack of interactivity). Hover handlers
+  // below check the current lock state at the moment of hover, so we
+  // don't need to add/remove listeners as the lock state changes.
+  if (isDM) {
+    node.on("mouseenter", () => {
+      const cur = stickerData[sticker.id];
+      if (!cur?.locked) return;
+      if (selectedStickerId === sticker.id) return;  // blue selection wins
+      node.stroke("#f39c12");
+      node.strokeWidth(1);
+      node.dash([4, 3]);
+      stickerLayer.batchDraw();
+    });
+    node.on("mouseleave", () => {
+      if (selectedStickerId === sticker.id) return;
+      node.stroke(null);
+      node.strokeWidth(0);
+      node.dash([]);
+      stickerLayer.batchDraw();
+    });
+  }
   _loadStickerImage(sticker.image_url).then(img => {
     if (img) { node.image(img); stickerLayer.batchDraw(); }
   });
@@ -2009,16 +2032,32 @@ function addStickerToMap(sticker) {
     e.cancelBubble = true;
     selectSticker(sticker.id);
   });
-  node.on("dragend", () => {
+  // Hold Shift while dragging to snap the top-left to integer cells.
+  // We override Konva's mouse-tracked position to the snapped one each
+  // dragmove tick; on dragend the emitted position uses the snapped value.
+  node.on("dragmove", (e) => {
     const s = stickerData[sticker.id];
-    if (!s) return;
-    const newX = node.x() / GRID - s.width  / 2;
-    const newY = node.y() / GRID - s.height / 2;
-    s.x = newX; s.y = newY;
-    window.socketEmit?.("update_sticker", { id: sticker.id, x: newX, y: newY });
+    if (s && e.evt && e.evt.shiftKey) {
+      const tlx = Math.round(node.x() / GRID - s.width  / 2);
+      const tly = Math.round(node.y() / GRID - s.height / 2);
+      node.x((tlx + s.width  / 2) * GRID);
+      node.y((tly + s.height / 2) * GRID);
+    }
     if (selectedStickerId === sticker.id) _updateStickerHandlePositions();
   });
-  node.on("dragmove", () => {
+  node.on("dragend", (e) => {
+    const s = stickerData[sticker.id];
+    if (!s) return;
+    let newX = node.x() / GRID - s.width  / 2;
+    let newY = node.y() / GRID - s.height / 2;
+    if (e.evt && e.evt.shiftKey) {
+      newX = Math.round(newX);
+      newY = Math.round(newY);
+      node.x((newX + s.width  / 2) * GRID);
+      node.y((newY + s.height / 2) * GRID);
+    }
+    s.x = newX; s.y = newY;
+    window.socketEmit?.("update_sticker", { id: sticker.id, x: newX, y: newY });
     if (selectedStickerId === sticker.id) _updateStickerHandlePositions();
   });
   stickerNodes[sticker.id] = node;
@@ -2043,6 +2082,22 @@ function updateStickerOnMap(sticker) {
   node.x((sticker.x + sticker.width  / 2) * GRID);
   node.y((sticker.y + sticker.height / 2) * GRID);
   node.rotation(sticker.rotation || 0);
+  // React to lock state changes — re-apply interactivity. No persistent
+  // outline; the DM-only hover handler shows the lock indicator when needed.
+  const isDM = document.body.dataset.role === "dm";
+  const playerCanModify = window._playersCanModifyStickers !== false;
+  const interactive = isDM || (playerCanModify && !sticker.locked);
+  node.draggable(interactive);
+  node.listening(interactive);
+  if (selectedStickerId === sticker.id) {
+    node.stroke("#4a90d9");
+    node.strokeWidth(2);
+    node.dash([]);
+  } else {
+    node.stroke(null);
+    node.strokeWidth(0);
+    node.dash([]);
+  }
   // Only reload the underlying image source if the URL actually changed.
   // Important: don't clobber an animated sticker's live canvas with the
   // static <img> on every move/rotate/resize.
@@ -2120,6 +2175,7 @@ function deselectSticker() {
   if (node) {
     node.stroke(null);
     node.strokeWidth(0);
+    node.dash([]);
   }
   for (const h of stickerHandleNodes) h.destroy();
   stickerHandleNodes = [];
@@ -2292,15 +2348,27 @@ function _updateStickerHandlePositions(opts) {
   }
 }
 
-// Delete selected sticker on Del / Backspace (any role, no input focused)
+// Sticker keyboard shortcuts:
+//   Del / Backspace — remove (gated by "add" permission)
+//   L (DM only)     — toggle lock on the selected sticker
 window.addEventListener("keydown", (e) => {
   if (!selectedStickerId) return;
   const tag = document.activeElement?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable) return;
+  const isDM = document.body.dataset.role === "dm";
   if (e.key === "Delete" || e.key === "Backspace") {
+    if (!isDM && window._playersCanUseStickers === false) return;
     e.preventDefault();
     const id = selectedStickerId;
     window.socketEmit?.("remove_sticker", { id });
+  } else if ((e.key === "l" || e.key === "L") && isDM) {
+    const s = stickerData[selectedStickerId];
+    if (!s) return;
+    e.preventDefault();
+    window.socketEmit?.("update_sticker", {
+      id: selectedStickerId,
+      locked: !s.locked,
+    });
   }
 });
 

@@ -1517,11 +1517,13 @@ if (_mapContainer) {
     }
     const stickerLibId = e.dataTransfer.getData("sticker_library_id");
     if (stickerLibId) {
-      // Use the image's natural aspect ratio so the sticker isn't squished. Max dim = 2 cells.
+      // Use the image's natural aspect ratio so the sticker isn't squished.
+      // Max dim = the library entry's configured default_size (set at upload).
       const aspect = parseFloat(e.dataTransfer.getData("sticker_aspect")) || 1;
+      const maxDim = Math.max(0.25, Math.min(50, parseFloat(e.dataTransfer.getData("sticker_default_size")) || 2));
       let width, height;
-      if (aspect >= 1) { width = 2; height = 2 / aspect; }
-      else             { width = 2 * aspect; height = 2; }
+      if (aspect >= 1) { width = maxDim; height = maxDim / aspect; }
+      else             { width = maxDim * aspect; height = maxDim; }
       socket.emit("spawn_library_sticker", {
         library_id: parseInt(stickerLibId),
         col: cell.col, row: cell.row,
@@ -1546,20 +1548,42 @@ function renderStickerLibrary(entries) {
     card.className = "sticker-library-card";
     card.draggable = true;
     card.dataset.stickerLibraryId = entry.id;
+    const defaultSize = (typeof entry.default_size === "number" && entry.default_size > 0)
+      ? entry.default_size : 2;
+    card.dataset.defaultSize = String(defaultSize);
     card.title = "Drag onto map to place";
+    const canEdit = ROLE === "dm" || window._playersCanUseStickers !== false;
     card.innerHTML = `
       <img class="sticker-thumb" src="${entry.image_url}" alt="">
       <span class="sticker-lib-name">${escapeHtml(entry.name)}</span>
+      <input class="sticker-default-size" type="number" min="0.25" max="50" step="0.25"
+             value="${defaultSize}" title="Default size (cells) when placed"
+             ${canEdit ? "" : "disabled"}>
       <button class="lib-delete" onclick="deleteStickerLibraryEntry(${entry.id})" title="Delete">×</button>
     `;
+    // Drag carries the entry id + aspect ratio + current default size
     card.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("sticker_library_id", entry.id);
+      e.dataTransfer.setData("sticker_default_size", card.dataset.defaultSize || "2");
       e.dataTransfer.effectAllowed = "copy";
-      // Capture natural aspect ratio so the spawned sticker matches the image
       const img = card.querySelector("img.sticker-thumb");
       const w = img?.naturalWidth, h = img?.naturalHeight;
       if (w && h) e.dataTransfer.setData("sticker_aspect", String(w / h));
     });
+    // Inline edit: changes broadcast and persist via rename handler (now supports default_size)
+    const sizeInput = card.querySelector(".sticker-default-size");
+    if (sizeInput) {
+      // Prevent the number input from initiating a drag of the card
+      sizeInput.addEventListener("mousedown", (ev) => ev.stopPropagation());
+      const commit = () => {
+        const val = Math.max(0.25, Math.min(50, parseFloat(sizeInput.value) || 2));
+        sizeInput.value = val;
+        card.dataset.defaultSize = String(val);
+        socket.emit("rename_sticker_library_entry", { id: entry.id, default_size: val });
+      };
+      sizeInput.addEventListener("change", commit);
+      sizeInput.addEventListener("blur", commit);
+    }
     list.appendChild(card);
   }
 }
@@ -1577,6 +1601,7 @@ if (stickerInput) {
     const file = stickerInput.files?.[0];
     const errEl = document.getElementById("sticker-upload-error");
     const nameEl = document.getElementById("sticker-name-input");
+    const sizeEl = document.getElementById("sticker-default-size-input");
     if (!file) return;
     if (errEl) errEl.classList.add("hidden");
     const fd = new FormData();
@@ -1586,7 +1611,10 @@ if (stickerInput) {
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || "Upload failed");
       const name = (nameEl?.value || "").trim() || file.name.replace(/\.[^.]+$/, "");
-      socket.emit("save_sticker_to_library", { name, image_url: data.url });
+      const defaultSize = Math.max(0.25, Math.min(50, parseFloat(sizeEl?.value) || 2));
+      socket.emit("save_sticker_to_library", {
+        name, image_url: data.url, default_size: defaultSize,
+      });
       if (nameEl) nameEl.value = "";
       stickerInput.value = "";
     } catch (err) {

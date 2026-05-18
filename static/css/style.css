@@ -950,6 +950,23 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
   margin-top: 6px;
   font-style: italic;
 }
+.sticker-perm-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+.sticker-perm-row input { margin: 0; }
+.sticker-locked-notice {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 8px 0;
+  font-style: italic;
+}
 
 /* Spell shape picker panel */
 .spell-picker {

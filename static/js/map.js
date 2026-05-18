@@ -1982,6 +1982,10 @@ function addStickerToMap(sticker) {
     return;
   }
   stickerData[sticker.id] = { ...sticker };
+  // Honor the DM's sticker-permission toggle when creating the node for players
+  const isDM = document.body.dataset.role === "dm";
+  const playerCanUse = window._playersCanUseStickers !== false;
+  const interactive = isDM || playerCanUse;
   const node = new Konva.Image({
     image: null,  // set when loaded
     width:  sticker.width  * GRID,
@@ -1991,8 +1995,8 @@ function addStickerToMap(sticker) {
     x: (sticker.x + sticker.width  / 2) * GRID,
     y: (sticker.y + sticker.height / 2) * GRID,
     rotation: sticker.rotation || 0,
-    draggable: true,
-    listening: true,
+    draggable: interactive,
+    listening: interactive,
     name: `sticker-${sticker.id}`,
   });
   node._stickerId = sticker.id;
@@ -2065,6 +2069,20 @@ function removeStickerFromMap(id) {
   stickerLayer?.batchDraw();
 }
 window.removeStickerFromMap = removeStickerFromMap;
+
+// Toggle drag/click on all placed stickers when the DM flips the
+// "players can use stickers" switch. DM is never affected.
+function _setStickerInteractivityForRole(canUse) {
+  if (document.body.dataset.role === "dm") return;
+  for (const id in stickerNodes) {
+    const node = stickerNodes[id];
+    node.draggable(canUse);
+    node.listening(canUse);
+  }
+  if (!canUse) deselectSticker();
+  stickerLayer?.batchDraw();
+}
+window._setStickerInteractivityForRole = _setStickerInteractivityForRole;
 
 function clearStickersFromMap() {
   deselectSticker();

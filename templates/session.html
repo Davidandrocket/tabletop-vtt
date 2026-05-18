@@ -198,15 +198,22 @@
           </details>
         </div>
         {% endif %}
-        <div class="map-profiles-section">
+        <div class="map-profiles-section" id="sticker-library-section">
           <details id="sticker-library-details">
             <summary class="map-profiles-summary">Sticker Library</summary>
+            {% if role == 'dm' %}
+            <label class="sticker-perm-row" title="Allow players to upload, add, move, resize and remove stickers">
+              <input id="sticker-players-toggle" type="checkbox" checked>
+              <span>Players can use stickers</span>
+            </label>
+            {% endif %}
             <div class="sticker-upload-row">
               <input id="sticker-upload-input" type="file" accept=".png,.svg,.webp,.gif" style="display:none">
               <input id="sticker-name-input" type="text" placeholder="Sticker name" maxlength="50" class="profile-name-input">
-              <button class="btn-sm btn-green" onclick="document.getElementById('sticker-upload-input').click()">Upload</button>
+              <button id="sticker-upload-btn" class="btn-sm btn-green" onclick="document.getElementById('sticker-upload-input').click()">Upload</button>
             </div>
             <div id="sticker-upload-error" class="error-text hidden"></div>
+            <div id="sticker-locked-notice" class="sticker-locked-notice hidden">Stickers are locked by the DM.</div>
             <div id="sticker-library-list" class="sticker-library-list"></div>
             <div class="sticker-library-hint">Drag a sticker onto the map to place it.</div>
           </details>

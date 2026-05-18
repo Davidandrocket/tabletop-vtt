@@ -122,8 +122,10 @@ socket.on("session_state", (data) => {
     renderMapProfiles(data.map_profiles || [], data.active_profile_id ?? null);
     renderLibrary(data.token_library || []);
   }
-  // Sticker library is visible to all roles
+  // Sticker library is visible to all roles; respect the DM's player toggle
+  window._playersCanUseStickers = data.players_can_use_stickers !== false;
   renderStickerLibrary(data.sticker_library || []);
+  applyStickerPermissionUI();
 
   // Load placed stickers (visible to everyone)
   window.clearStickersFromMap?.();
@@ -1597,6 +1599,62 @@ if (stickerInput) {
 
 socket.on("sticker_library_updated", (data) => {
   renderStickerLibrary(data.entries || []);
+  applyStickerPermissionUI();
+});
+
+// Sticker permission toggle (DM controls; broadcast to all in the session).
+window._playersCanUseStickers = true;
+
+function stickersUsableByMe() {
+  return ROLE === "dm" || window._playersCanUseStickers;
+}
+window.stickersUsableByMe = stickersUsableByMe;
+
+function applyStickerPermissionUI() {
+  const canUse = stickersUsableByMe();
+  // Library cards become non-draggable when locked
+  document.querySelectorAll(".sticker-library-card").forEach(card => {
+    card.draggable = canUse;
+    card.style.cursor = canUse ? "" : "not-allowed";
+    card.title = canUse ? "Drag onto map to place" : "Stickers locked by DM";
+    card.querySelectorAll(".lib-delete").forEach(b => {
+      b.style.display = canUse ? "" : "none";
+    });
+  });
+  // Hide upload + library name input for non-DMs when locked
+  const uploadRow  = document.querySelector("#sticker-library-section .sticker-upload-row");
+  const lockNotice = document.getElementById("sticker-locked-notice");
+  const hint       = document.querySelector("#sticker-library-section .sticker-library-hint");
+  if (ROLE !== "dm") {
+    if (uploadRow)  uploadRow.style.display  = canUse ? "" : "none";
+    if (lockNotice) lockNotice.classList.toggle("hidden", canUse);
+    if (hint)       hint.style.display = canUse ? "" : "none";
+  }
+  // Disable selection / edit on existing placed stickers for locked-out players
+  if (!canUse && window.deselectSticker) window.deselectSticker();
+  // Make each placed sticker non-interactive for locked-out players
+  if (window._setStickerInteractivityForRole) {
+    window._setStickerInteractivityForRole(canUse);
+  }
+  // Sync the DM checkbox in case the value was updated remotely (e.g., another DM)
+  if (ROLE === "dm") {
+    const cb = document.getElementById("sticker-players-toggle");
+    if (cb) cb.checked = !!window._playersCanUseStickers;
+  }
+}
+
+if (ROLE === "dm") {
+  const stickerToggle = document.getElementById("sticker-players-toggle");
+  if (stickerToggle) {
+    stickerToggle.addEventListener("change", () => {
+      socket.emit("set_players_can_use_stickers", { value: stickerToggle.checked });
+    });
+  }
+}
+
+socket.on("players_can_use_stickers_updated", (data) => {
+  window._playersCanUseStickers = !!data.value;
+  applyStickerPermissionUI();
 });
 
 // Sticker instance events (broadcast to everyone)

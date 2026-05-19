@@ -1163,6 +1163,14 @@ function drawRuler(startCell, endCell) {
 function setToolActive(active) {
   tokenLayer.listening(!active);
   tokenLayer.batchDraw();
+  // Stickers also need to pass clicks through when a tool (ruler / ping /
+  // spell overlay) is active — otherwise the sticker captures the click
+  // and the tool never fires.
+  if (stickerLayer) {
+    stickerLayer.listening(!active);
+    stickerLayer.batchDraw();
+    if (active) deselectSticker();
+  }
 }
 
 function toggleSelectionMode() {

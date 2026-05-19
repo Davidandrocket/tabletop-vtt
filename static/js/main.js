@@ -505,15 +505,50 @@ function buildPartyCard(key) {
     <span title="Initiative Bonus">Init ${initStr}</span>`;
   card.appendChild(statsRow);
 
-  // Spawn button
+  // Action row: View Sheet + Spawn Token
+  const actions = document.createElement("div");
+  actions.className = "party-card-actions";
+
+  const viewBtn = document.createElement("button");
+  viewBtn.className = "btn-sm party-view-btn";
+  viewBtn.textContent = "View Sheet";
+  viewBtn.onclick = () => viewPartyCharacterSheet(key);
+  actions.appendChild(viewBtn);
+
   const btn = document.createElement("button");
   btn.className = "btn-primary btn-sm party-spawn-btn";
   btn.textContent = "Spawn Token";
   btn.onclick = () => spawnCharacterToken(key);
-  card.appendChild(btn);
+  actions.appendChild(btn);
+
+  card.appendChild(actions);
 
   return card;
 }
+
+// DM-only: open a read-only view of a player's character sheet in the
+// shared #char-stats panel. Reuses renderCharacterSheet directly, then
+// reveals the "Back to Party" button so the DM can return.
+function viewPartyCharacterSheet(key) {
+  if (ROLE !== "dm") return;
+  const entry = partyCharacters[key];
+  if (!entry || !entry.character) return;
+  // Stash the character name so quick rolls get prefixed with it in chat
+  window._dmViewedCharName = entry.character.name || "";
+  renderCharacterSheet(entry.character);
+  // Hide the party list while viewing so the panel doesn't double-scroll
+  document.getElementById("party-panel")?.classList.add("hidden");
+  document.getElementById("dm-view-close-btn")?.classList.remove("hidden");
+}
+window.viewPartyCharacterSheet = viewPartyCharacterSheet;
+
+function closeViewedCharacterSheet() {
+  window._dmViewedCharName = "";
+  document.getElementById("char-stats")?.classList.add("hidden");
+  document.getElementById("party-panel")?.classList.remove("hidden");
+  document.getElementById("dm-view-close-btn")?.classList.add("hidden");
+}
+window.closeViewedCharacterSheet = closeViewedCharacterSheet;
 
 function spawnCharacterToken(key) {
   const entry = partyCharacters[key];
@@ -1370,13 +1405,17 @@ function rollDice() {
 }
 
 // Quick-roll a d20 with the given modifier and a chat label.
-// Used by clickable elements in the character sheet.
+// Used by clickable elements in the character sheet. When the DM is
+// viewing a player's sheet, the label gets prefixed with the character
+// name so chat reads "DM rolled Aragorn — DEX check: 18" instead of
+// just "DM rolled DEX check: 18".
 function quickRollMod(modifier, label) {
   const mod = parseInt(modifier) || 0;
   const sign = mod >= 0 ? "+" : "";
   const notation = `1d20${sign}${mod}`;
   const privateRoll = document.getElementById("dice-private")?.checked ?? false;
-  socket.emit("roll_dice", { notation, label, private: privateRoll, advantage: _advantage });
+  const prefix = window._dmViewedCharName ? `${window._dmViewedCharName} — ` : "";
+  socket.emit("roll_dice", { notation, label: prefix + label, private: privateRoll, advantage: _advantage });
   resetAdvantage();
 }
 window.quickRollMod = quickRollMod;

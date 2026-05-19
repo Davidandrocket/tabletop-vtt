@@ -78,6 +78,9 @@
 
         <!-- Character stats (populated by JS) -->
         <div id="char-stats" class="hidden">
+          {% if role == 'dm' %}
+          <button id="dm-view-close-btn" class="btn-sm dm-view-close-btn hidden" onclick="closeViewedCharacterSheet()" title="Close character sheet view">← Back to Party</button>
+          {% endif %}
           <div class="char-header">
             <img id="char-avatar" src="" alt="" class="avatar hidden">
             <div>

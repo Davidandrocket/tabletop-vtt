@@ -1276,10 +1276,28 @@ h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;
   padding: 2px 4px;
 }
 
+.party-card-actions {
+  display: flex;
+  gap: 4px;
+}
+.party-card-actions > * { flex: 1; }
 .party-spawn-btn {
-  width: 100%;
   text-align: center;
 }
+.party-view-btn {
+  text-align: center;
+  background: var(--panel);
+  color: var(--text);
+}
+.party-view-btn:hover { background: var(--bg); }
+
+.dm-view-close-btn {
+  width: 100%;
+  background: var(--panel);
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.dm-view-close-btn:hover { color: var(--text); background: var(--bg); }
 
 /* ── Mobile ── */
 @media (max-width: 640px) {

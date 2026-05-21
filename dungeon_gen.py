@@ -60,6 +60,10 @@ class Preset:
     junction_exit_count_weights: dict  # 2-way vs 3-way intersections
     chest_chance: float           # per-roll chest probability (rooms roll twice, dead-ends once)
     spawn_room_size: tuple
+    # Floor of chests guaranteed in every non-special room. Labyrinth uses
+    # this to make loot feel less sparse since the dungeon has so few
+    # rooms in the first place.
+    min_chests_per_room: int = 0
 
 
 PRESET_GENERIC = Preset(
@@ -86,8 +90,9 @@ PRESET_LABYRINTH = Preset(
     door_behavior_weights={"room": 20, "hall": 80},
     hall_behavior_weights={"straight": 50, "room": 10, "junction": 40},
     junction_exit_count_weights={2: 50, 3: 50},
-    chest_chance=0.30,
+    chest_chance=0.3,
     spawn_room_size=(4, 4),
+    min_chests_per_room=1,  # rooms are precious here; always a chest
 )
 
 
@@ -107,7 +112,7 @@ def get_preset(name):
 SPECIAL_ROOM_CHANCE = 0.20
 
 # Once a room is decided to be special, weights pick which type.
-SPECIAL_ROOM_TYPE_WEIGHTS = {"boss": 40, "secret": 25, "treasure": 35}
+SPECIAL_ROOM_TYPE_WEIGHTS = {"boss": 35, "secret": 20, "treasure": 25, "puzzle": 20}
 
 # Per-type overrides applied when a room becomes special. size_range
 # overrides preset.room_size_range; n_doors_range overrides
@@ -123,13 +128,24 @@ SPECIAL_ROOM_PROFILES = {
         "size_range":     (3, 5),
         "n_doors_range":  (0, 0),  # cul-de-sac
         "min_chests":     2,
-        "max_chests":     3,
+        "max_chests":     4,
     },
     "secret": {
         "size_range":     (3, 5),
         "n_doors_range":  (0, 0),
         "min_chests":     1,
-        "max_chests":     2,
+        "max_chests":     3,
+    },
+    # Puzzle rooms are ~2x normal so each half ends up close to normal
+    # room size. Divider wall + hidden half are walls until the DM clicks
+    # to solve. n_doors_range is forced to (0, 0) — no second exit means
+    # players can't bypass the puzzle. Chest counts are placed in the
+    # hidden half only (see _maybe_place_chests_in_puzzle).
+    "puzzle": {
+        "size_range":     (8, 12),
+        "n_doors_range":  (0, 0),
+        "min_chests":     2,
+        "max_chests":     3,
     },
 }
 
@@ -193,6 +209,15 @@ class World:
         # stays room/hall_floor for walkability/fog/etc. — the trap is just
         # a render overlay (red wash for the DM, faint hint for players).
         self.traps: set[tuple[int, int]] = set()
+        # NOTE: puzzle rooms used to carry an extra puzzle_groups data
+        # structure with hidden-floor cells and pending chests so the DM
+        # could "solve" the puzzle to reveal them. That was redundant
+        # with fog of war (DM already sees unrevealed cells dimmed;
+        # players don't see anything they haven't reached). The current
+        # design just lays a permanent divider wall and puts real chests
+        # in the back half — the DM drags player tokens past the wall
+        # when narrative warrants it. Legacy puzzle_groups blobs are
+        # migrated into normal cells+chests in from_dict below.
 
     def get(self, x, y):
         return self.cells.get((x, y))
@@ -263,6 +288,37 @@ class World:
         for key in d.get("traps", []):
             x, y = key.split(",")
             w.traps.add((int(x), int(y)))
+        # Migrate legacy puzzle_groups data (any of the three earlier
+        # schemas: hidden_cells / hidden_floor_cells / divider+passage).
+        # Hidden-half cells flip to ROOM_FLOOR; pending chests get poured
+        # into world.chests; the data is discarded. Solved groups are
+        # already in their target state so we just drop them.
+        def _parse_cells(key_list):
+            out = []
+            for k in (key_list or []):
+                px, py = k.split(",")
+                out.append((int(px), int(py)))
+            return out
+
+        for g in d.get("puzzle_groups", []):
+            if g.get("solved"):
+                continue
+            hidden_open = (
+                _parse_cells(g.get("hidden_floor_cells"))
+                + _parse_cells(g.get("passage_cells"))
+            )
+            if not hidden_open and "hidden_cells" in g:
+                # Oldest schema (no divider distinction) — promote the
+                # whole walled area to floor.
+                hidden_open = _parse_cells(g.get("hidden_cells"))
+            for cell in hidden_open:
+                if w.cells.get(cell) == CellKind.WALL:
+                    w.cells[cell] = CellKind.ROOM_FLOOR
+            for key, facing in (g.get("pending_chests") or {}).items():
+                cx, cy = key.split(",")
+                c = (int(cx), int(cy))
+                if c not in w.chests:
+                    w.chests[c] = facing
         return w
 
 
@@ -493,14 +549,21 @@ def _resolve_into_room(world, op, rng, *, door_cells, incoming_side, layout_op=N
         if place_room(world, rx0, ry0, w, h, door_cells):
             _add_room_doorways(world, rx0, ry0, w, h, incoming_side, rng,
                                n_range=n_doors_range)
-            _maybe_place_chests_in_room(world, rx0, ry0, w, h,
-                                         _chest_rng(world, op),
-                                         special=special)
+            # Tag the room interior so the renderer uses the special
+            # floor color. We tag every interior cell (visible AND any
+            # cell that's about to become a puzzle 'hidden' wall) so
+            # cells revealed later still pick up the puzzle color.
             if special:
                 for x in range(rx0, rx0 + w):
                     for y in range(ry0, ry0 + h):
-                        if world.cells.get((x, y)) == CellKind.ROOM_FLOOR:
-                            world.special_floors[(x, y)] = special
+                        world.special_floors[(x, y)] = special
+            if special == "puzzle":
+                _make_puzzle_room(world, rx0, ry0, w, h, incoming_side,
+                                   _chest_rng(world, op))
+            else:
+                _maybe_place_chests_in_room(world, rx0, ry0, w, h,
+                                             _chest_rng(world, op),
+                                             special=special)
             if special == "secret":
                 for c in door_cells:
                     world.secret_doors.add(c)
@@ -900,6 +963,102 @@ def _chest_candidates_in_room(world, rx0, ry0, w, h):
     return candidates
 
 
+def _puzzle_hidden_chest_candidates(rx0, ry0, w, h, incoming_side):
+    """Perimeter floor cells of the hidden half paired with a facing
+    direction (away from whatever wall they sit against). Includes the
+    cells against the divider — those face into the hidden half."""
+    out = []
+    if incoming_side == "west":
+        divider_col = rx0 + w // 2
+        x_start = divider_col + 1
+        x_end = rx0 + w  # exclusive
+        if x_start >= x_end:
+            return out
+        for y in range(ry0, ry0 + h):
+            out.append(((x_start, y), "east"))         # vs divider (west side)
+            out.append(((x_end - 1, y), "west"))       # vs outer east wall
+        for x in range(x_start, x_end):
+            out.append(((x, ry0), "south"))            # vs outer north wall
+            out.append(((x, ry0 + h - 1), "north"))    # vs outer south wall
+    elif incoming_side == "east":
+        divider_col = rx0 + w // 2
+        x_start = rx0
+        x_end = divider_col
+        if x_start >= x_end:
+            return out
+        for y in range(ry0, ry0 + h):
+            out.append(((x_end - 1, y), "west"))       # vs divider (east side)
+            out.append(((x_start, y), "east"))         # vs outer west wall
+        for x in range(x_start, x_end):
+            out.append(((x, ry0), "south"))
+            out.append(((x, ry0 + h - 1), "north"))
+    elif incoming_side == "north":
+        divider_row = ry0 + h // 2
+        y_start = divider_row + 1
+        y_end = ry0 + h
+        if y_start >= y_end:
+            return out
+        for x in range(rx0, rx0 + w):
+            out.append(((x, y_start), "south"))        # vs divider (north side)
+            out.append(((x, y_end - 1), "north"))      # vs outer south wall
+        for y in range(y_start, y_end):
+            out.append(((rx0, y), "east"))             # vs outer west wall
+            out.append(((rx0 + w - 1, y), "west"))     # vs outer east wall
+    else:  # south
+        divider_row = ry0 + h // 2
+        y_start = ry0
+        y_end = divider_row
+        if y_start >= y_end:
+            return out
+        for x in range(rx0, rx0 + w):
+            out.append(((x, y_end - 1), "north"))      # vs divider (south side)
+            out.append(((x, y_start), "south"))        # vs outer north wall
+        for y in range(y_start, y_end):
+            out.append(((rx0, y), "east"))
+            out.append(((rx0 + w - 1, y), "west"))
+    return out
+
+
+def _make_puzzle_room(world, rx0, ry0, w, h, incoming_side, rng):
+    """Lay a permanent divider wall across the middle of the puzzle room
+    and place chests directly into the hidden half's perimeter. The
+    divider blocks token movement permanently; the DM teleports tokens
+    past it (drag-and-drop ignores walls) when narrative warrants. Fog
+    of war does all the "hidden from players" work — chests in the back
+    half just aren't visible to players until a token reaches them."""
+    if incoming_side in ("west", "east"):
+        divider = [(rx0 + w // 2, y) for y in range(ry0, ry0 + h)]
+    else:
+        divider = [(x, ry0 + h // 2) for x in range(rx0, rx0 + w)]
+    for c in divider:
+        world.cells[c] = CellKind.WALL
+
+    candidates = _puzzle_hidden_chest_candidates(rx0, ry0, w, h, incoming_side)
+    candidates = [(c, f) for (c, f) in candidates
+                  if world.cells.get(c) == CellKind.ROOM_FLOOR]
+
+    prof = SPECIAL_ROOM_PROFILES["puzzle"]
+    min_c = prof.get("min_chests", 0)
+    max_c = prof.get("max_chests", 2)
+
+    def _place():
+        nonlocal candidates
+        cell, facing = rng.choice(candidates)
+        world.chests[cell] = facing
+        candidates = [(c, f) for (c, f) in candidates if c != cell]
+
+    for _ in range(min_c):
+        if not candidates:
+            break
+        _place()
+    for _ in range(max(0, max_c - min_c)):
+        if not candidates:
+            break
+        if rng.random() >= world.preset.chest_chance:
+            continue
+        _place()
+
+
 def _maybe_place_chests_in_room(world, rx0, ry0, w, h, rng, *, special=None):
     """Place chests in the room.
 
@@ -917,7 +1076,9 @@ def _maybe_place_chests_in_room(world, rx0, ry0, w, h, rng, *, special=None):
         min_c = prof.get("min_chests", 0)
         max_c = prof.get("max_chests", 2)
     else:
-        min_c, max_c = 0, 2
+        # Preset can floor non-special chest counts (labyrinth: at least 1).
+        min_c = max(0, getattr(world.preset, "min_chests_per_room", 0))
+        max_c = max(2, min_c)
 
     def _place():
         nonlocal candidates

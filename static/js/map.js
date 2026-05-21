@@ -25,7 +25,9 @@ const SPECIAL_FLOOR_COLORS = {
   boss:     "#5a2a2e",  // dark crimson
   treasure: "#8a7a3e",  // gold tint
   secret:   "#5a3a6e",  // purple tint
+  puzzle:   "#3a5a6e",  // muted teal/blue
 };
+
 
 // Secret doors render with a wall-ish color so players don't notice them
 // at a glance. Slightly off the base wall color so the DM (and observant
@@ -499,6 +501,7 @@ function renderProceduralCells(payload) {
   const spawnMarker = payload.spawn_marker || [];
   const specialFloors = payload.special_floors || {};
   const secretDoors = new Set(payload.secret_doors || []);
+  const isDM = document.body.dataset.role === "dm";
 
   // Bucket cell keys by color so the renderer sets fillStyle once per group.
   // Track bbox in the same pass so we don't iterate twice.
